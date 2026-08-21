@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Marca do porcelain: um tronco e um branch saindo dele. Monocromática, traço fino,
+       sem preenchimento — as pontas arredondadas fazem o papel dos nós do grafo.
+       O `prefers-color-scheme` aqui dentro é o que faz o ícone virar claro em aba escura;
+       favicon SVG aceita CSS, e é a única forma de um ícone único servir aos dois temas. -->
+  <style>
+    .mark { stroke: #131313 }
+    @media (prefers-color-scheme: dark) { .mark { stroke: #ededed } }
+  </style>
+  <g class="mark" fill="none" stroke-width="3" stroke-linecap="round">
+    <path d="M11 5v22" />
+    <path d="M11 13c0 5 10 2 10 8v6" />
+  </g>
+</svg>

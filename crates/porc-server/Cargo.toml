@@ -1,0 +1,32 @@
+[package]
+name = "porc-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Ligada por padrão, mas o código só existe em build de debug: o `lib.rs` combina
+# `feature = "dev-proxy"` com `debug_assertions`. Um `cargo build --release` não carrega
+# uma linha do proxy.
+default = ["dev-proxy", "embed-web"]
+dev-proxy = ["dep:hyper", "dep:hyper-util"]
+# As duas convivem no `default` porque o Cargo não sabe variar feature por perfil. Quem
+# desempata é `debug_assertions`: `dev-proxy` vence em debug, `embed-web` em release.
+embed-web = ["dep:rust-embed", "dep:mime_guess"]
+
+[dependencies]
+axum.workspace = true
+getrandom.workspace = true
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+mime_guess = { workspace = true, optional = true }
+rust-embed = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true

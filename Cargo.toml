@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/porc-cli",
+    "crates/porc-server",
+    "crates/porc-git",
+    "crates/porc-index",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Piso do toolchain: abaixo disto o axum 0.7 e o rusqlite bundled não compilam.
+rust-version = "1.75"
+license = "MIT"
+
+[workspace.dependencies]
+porc-server = { path = "crates/porc-server" }
+porc-git = { path = "crates/porc-git" }
+porc-index = { path = "crates/porc-index" }
+
+anyhow = "1"
+axum = "0.8"
+# `std` é o que faz `getrandom::Error` implementar `std::error::Error`, e portanto encaixar
+# no `#[source]` do thiserror.
+getrandom = { version = "0.3", features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+subtle = "2"
+serde_json = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "sync",
+    "time",
+    "io-util",
+] }
+hyper = "1"
+hyper-util = { version = "0.1", features = [
+    "client",
+    "client-legacy",
+    "http1",
+    "tokio",
+] }
+mime_guess = "2"
+rust-embed = "8"
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

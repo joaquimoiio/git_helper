@@ -1,0 +1,209 @@
+/* FONTE ÚNICA de cor, espaço, raio, tipografia e duração do porcelain.
+ *
+ * Nenhum componente escreve um valor cru. Se um valor não existe aqui, o passo é criar o
+ * token, não hardcodar.
+ *
+ * A escala neutra é nomeada por *profundidade*, não por claridade: `--n-0` é sempre o
+ * fundo mais afastado do leitor e `--n-11` sempre o texto de maior contraste. É isso que
+ * permite o tema claro ser o espelho exato do escuro — mesmos nomes, valores invertidos —
+ * sem que componente nenhum saiba qual tema está ativo.
+ */
+
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------- fontes
+ * Servidas pelo próprio binário. Zero CDN: o app tem que funcionar offline e a CSP é
+ * `default-src 'self'`. Uma fonte variável por subset cobre todos os pesos da UI.
+ *
+ * `font-display: block` e não `swap`: o arquivo vem do mesmo processo que serviu o HTML,
+ * então o bloqueio é imperceptível — e um flash de fallback numa interface densa e
+ * monocromática desloca cada linha da tela.
+ */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url("@fonts/Inter-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url("@fonts/Inter-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: block;
+  src: url("@fonts/JetBrainsMono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: block;
+  src: url("@fonts/JetBrainsMono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
+    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ------------------------------------------------------------------------ tema
+ * Um só interruptor: `color-scheme`. Cada token é escrito **uma vez**, com
+ * `light-dark(claro, escuro)`, então o claro é literalmente o espelho do escuro — não há
+ * como os dois conjuntos divergirem, porque não há dois conjuntos.
+ *
+ * `dark light` no `:root` significa "siga o sistema, e escuro na frente". O tema do sistema
+ * já vale no primeiro pixel, sem JS e sem script inline — que a CSP `default-src 'self'`
+ * proíbe de qualquer forma. O `data-theme` só existe quando o usuário escolheu
+ * explicitamente.
+ *
+ * Na prática `prefers-color-scheme` nunca responde "sem preferência" (o valor saiu da
+ * spec), então quem nunca escolheu nada no sistema vê o claro. Escuro continua sendo o
+ * default de *projeto* — é o tema para o qual a paleta foi desenhada —, mas não temos como
+ * impô-lo a quem o sistema declarou claro sem contrariar o pedido do usuário.
+ */
+:root {
+  color-scheme: dark light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* ---------------------------------------------------------------- escala neutra
+ * Fora do `@theme` de propósito: `@theme inline` abaixo faz as utilities apontarem para
+ * estas variáveis em vez de copiarem o valor, e é o que faz a troca de tema funcionar.
+ */
+:root {
+  --n-0: light-dark(#fbfbfb, #0a0a0a); /* fundo da aplicação */
+  --n-1: light-dark(#f6f6f6, #0f0f0f); /* superfície de painel */
+  --n-2: light-dark(#f0f0f0, #151515); /* superfície elevada */
+  --n-3: light-dark(#e9e9e9, #1c1c1c); /* hover / seleção fraca */
+  --n-4: light-dark(#e0e0e0, #232323); /* seleção */
+  --n-5: light-dark(#d6d6d6, #2e2e2e); /* borda sutil (divisórias de painel) */
+  --n-6: light-dark(#bdbdbd, #3d3d3d); /* borda */
+  --n-7: light-dark(#9c9c9c, #565656); /* borda forte / elemento inativo */
+  --n-8: light-dark(#808080, #6e6e6e); /* texto desabilitado */
+  --n-9: light-dark(#666666, #8f8f8f); /* texto mudo */
+  --n-10: light-dark(#3f3f3f, #bcbcbc); /* texto secundário */
+  --n-11: light-dark(#131313, #ededed); /* texto primário */
+
+  /* Semânticas dessaturadas — nunca neon. `-fg` é traço e texto, `-bg` é o realce de
+   * fundo do diff, que precisa conviver com texto por cima. */
+  --add-fg: light-dark(#3f6b46, #7fa07f);
+  --add-bg: light-dark(#e7f0e8, #16241a);
+  --del-fg: light-dark(#8f4444, #ad7373);
+  --del-bg: light-dark(#f6e9e9, #271719);
+  --conflict-fg: light-dark(#75601f, #a79261);
+  --conflict-bg: light-dark(#f3eedc, #262014);
+  --error-fg: light-dark(#9c4a4a, #c07a7a);
+  --error-bg: light-dark(#f7e8e8, #2b1618);
+}
+
+@theme inline {
+  /* --- cor --------------------------------------------------------------- */
+  --color-n-0: var(--n-0);
+  --color-n-1: var(--n-1);
+  --color-n-2: var(--n-2);
+  --color-n-3: var(--n-3);
+  --color-n-4: var(--n-4);
+  --color-n-5: var(--n-5);
+  --color-n-6: var(--n-6);
+  --color-n-7: var(--n-7);
+  --color-n-8: var(--n-8);
+  --color-n-9: var(--n-9);
+  --color-n-10: var(--n-10);
+  --color-n-11: var(--n-11);
+
+  --color-add: var(--add-fg);
+  --color-add-bg: var(--add-bg);
+  --color-del: var(--del-fg);
+  --color-del-bg: var(--del-bg);
+  --color-conflict: var(--conflict-fg);
+  --color-conflict-bg: var(--conflict-bg);
+  --color-error: var(--error-fg);
+  --color-error-bg: var(--error-bg);
+}
+
+@theme {
+  /* --- tipografia -------------------------------------------------------- *
+   * Cinco tamanhos no app inteiro. Não existe um sexto; se um texto não cabe em nenhum
+   * destes, o problema é o layout. */
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 18px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+  --text-md: 15px;
+  --text-md--line-height: 22px;
+  --text-lg: 19px;
+  --text-lg--line-height: 26px;
+
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* --- espaço ------------------------------------------------------------ *
+   * Toda utility de espaçamento do Tailwind deriva daqui: `p-2` é
+   * `calc(var(--spacing) * 2)` = 8px. Uma escala de 4px, sem exceções. */
+  --spacing: 4px;
+
+  /* --- raio -------------------------------------------------------------- */
+  --radius-none: 0px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+
+  /* --- duração ----------------------------------------------------------- *
+   * Duas, e só duas. `fast` para realce e hover, `slow` para mudança de layout. */
+  --duration-fast: 120ms;
+  --duration-slow: 180ms;
+
+  /* --- borda ------------------------------------------------------------- *
+   * Separação é sempre 1px de baixo contraste. Sem sombra, sem gradiente. */
+  --default-border-color: var(--n-5);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background: var(--n-0);
+    color: var(--n-11);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Densidade slim: nada de foco espesso do agente do usuário. */
+  :focus-visible {
+    outline: 1px solid var(--n-9);
+    outline-offset: 1px;
+  }
+}
