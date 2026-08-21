@@ -6,3 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+directories.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

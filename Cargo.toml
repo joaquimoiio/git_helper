@@ -10,8 +10,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-# Piso do toolchain: abaixo disto o axum 0.7 e o rusqlite bundled não compilam.
-rust-version = "1.75"
+# Piso do toolchain. Não é escolha nossa: é o maior `rust-version` da árvore de dependências
+# (`wasip2` pede 1.87, `hashbrown`/`clap` pedem 1.85). Declarar menos que isso seria uma promessa
+# que o `cargo build` de quem tem 1.80 desmentiria na hora.
+rust-version = "1.87"
 license = "MIT"
 
 [workspace.dependencies]
@@ -20,7 +22,7 @@ porc-git = { path = "crates/porc-git" }
 porc-index = { path = "crates/porc-index" }
 
 anyhow = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 # `std` é o que faz `getrandom::Error` implementar `std::error::Error`, e portanto encaixar
 # no `#[source]` do thiserror.
 getrandom = { version = "0.3", features = ["std"] }
@@ -30,15 +32,23 @@ serde_json = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
+# Ver o comentário no `Cargo.toml` do `porc-git`: sem `https`/`ssh`, que são coisa do
+# shell-out para o `git` do sistema.
+git2 = { version = "0.21", default-features = false }
+sha2 = "0.10"
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",
     "net",
+    "process",
     "signal",
     "sync",
     "time",
     "io-util",
 ] }
+# Só para `killpg`: cancelar um shell-out precisa matar o **grupo** de processos, senão
+# `git-remote-https` e `ssh` ficam órfãos. `Child::kill` mata só o filho direto.
+libc = "0.2"
 hyper = "1"
 hyper-util = { version = "0.1", features = [
     "client",
@@ -47,7 +57,16 @@ hyper-util = { version = "0.1", features = [
     "tokio",
 ] }
 mime_guess = "2"
+# `bundled` compila o SQLite junto: o binário do usuário não pode depender da versão de
+# libsqlite3 que a distribuição dele resolveu instalar. Não há feature `fts5` no rusqlite —
+# FTS5 já vem compilado no SQLite do `bundled`, e é SQL, não API do crate. O teste
+# `fts5_esta_disponivel` guarda isso, para o Bloco H não descobrir tarde.
+rusqlite = { version = "0.40", features = ["bundled"] }
 rust-embed = "8"
+toml = "1"
+# `CancellationToken`: cancelar um job é avisar *todas* as pontas (o processo, o leitor de
+# stderr, o watchdog) de uma vez só.
+tokio-util = "0.7"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "set-header"] }
 tracing = "0.1"

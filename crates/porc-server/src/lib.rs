@@ -1,6 +1,9 @@
 //! Camada HTTP: router axum, middlewares (origin, rate limit, auth, csrf), rotas,
 //! WebSocket e embed do frontend. Nunca `use git2` — fala com `porc-git`.
 
+#[cfg(unix)]
+pub mod askpass;
+pub mod config;
 /// Proxy para o Vite. Existe só em debug e só com a feature ligada — ver `dev_proxy.rs`.
 #[cfg(all(feature = "dev-proxy", debug_assertions))]
 pub mod dev_proxy;
@@ -10,8 +13,12 @@ pub mod dev_proxy;
     not(all(feature = "dev-proxy", debug_assertions))
 ))]
 pub mod embed;
+pub mod jobs;
 pub mod middleware;
+pub mod repos;
+pub mod routes;
 pub mod session;
+pub mod ws;
 
 #[cfg(not(any(
     all(feature = "dev-proxy", debug_assertions),
@@ -99,6 +106,21 @@ pub struct AppState {
     pub instance_id: String,
     /// Porta real em que estamos servindo. O guard de `Host` compara contra ela.
     pub port: u16,
+    /// Config resolvida: raiz do navegador de pastas (já canônica) e limites da varredura.
+    /// Nenhum caminho vindo do cliente escapa da raiz. `Arc` porque o estado é clonado por
+    /// request.
+    pub settings: Arc<config::Settings>,
+    /// Repositórios abertos neste boot. Só o usuário o preenche, e some quando o processo sai.
+    pub repos: Arc<repos::Registry>,
+    /// Índice em SQLite. Descartável: se o arquivo não abrir, ele cai para memória e o app sobe
+    /// do mesmo jeito — o que se perde é a memória entre boots, não o acesso ao git.
+    pub index: Arc<porc_index::Index>,
+    /// Jobs em andamento e o canal de eventos que o WebSocket entrega.
+    pub jobs: Arc<jobs::Jobs>,
+    /// Pedidos de senha esperando resposta do usuário. A passphrase passa por aqui em memória e
+    /// segue para o socket; não é guardada em lugar nenhum.
+    #[cfg(unix)]
+    pub prompts: Arc<askpass::Prompts>,
     /// Avisado uma vez, por quem pedir o encerramento.
     shutdown: Arc<tokio::sync::Notify>,
 }
@@ -213,6 +235,43 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/v1/session", post(session::create))
         .route("/api/v1/whoami", get(whoami))
+        .route("/api/v1/fs/list", get(routes::fs::list))
+        .route("/api/v1/fs/scan", get(routes::fs::scan))
+        .route(
+            "/api/v1/repos",
+            get(routes::repos::list).post(routes::repos::open),
+        )
+        // Estática antes da paramétrica: o matchit do axum dá prioridade ao segmento literal,
+        // então `init` nunca é confundido com um `repo_id`.
+        .route("/api/v1/repos/init", post(routes::repos::init))
+        // Chaves e não `:id`: é a sintaxe de parâmetro do axum 0.8.
+        .route("/api/v1/repos/{repo_id}", get(routes::repos::get))
+        .route("/api/v1/repos/{repo_id}/log", get(routes::repos::log))
+        .route("/api/v1/recents", get(routes::recents::list))
+        .route(
+            "/api/v1/recents/{repo_id}",
+            axum::routing::delete(routes::recents::forget),
+        )
+        .route("/api/v1/jobs", get(routes::jobs::list))
+        // O tipo é segmento estático, não parâmetro: cada tipo tem corpo próprio.
+        .route("/api/v1/jobs/test", post(routes::jobs::create_test))
+        .route("/api/v1/jobs/clone", post(routes::jobs::create_clone))
+        .route(
+            "/api/v1/jobs/{job_id}",
+            get(routes::jobs::get).delete(routes::jobs::cancel),
+        );
+
+    #[cfg(unix)]
+    let router = router.route(
+        "/api/v1/jobs/{job_id}/askpass",
+        post(routes::jobs::answer_askpass),
+    );
+
+    let router = router
+        // O upgrade atravessa as mesmas camadas do resto: `/api/` significa `origin::guard` e
+        // `auth::require_session` antes do handshake. WebSocket não sofre CORS e escapa de
+        // `SameSite`, então um socket fora dessas camadas seria a porta dos fundos do app.
+        .route("/api/v1/ws", get(ws::upgrade))
         .route("/api/v1/ping", post(ping))
         .route("/api/v1/shutdown", post(shutdown));
 
@@ -276,7 +335,16 @@ impl Bound {
     pub async fn serve(self) -> Result<(), ServeError> {
         tracing::info!(addr = %self.addr, "porcelain no ar");
 
-        let signal = shutdown_signal(self.state.shutdown.clone());
+        let jobs = self.state.jobs.clone();
+        let notify = self.state.shutdown.clone();
+
+        // O aviso de parada e a faxina, nesta ordem: o axum só para de aceitar depois que este
+        // futuro resolve, então cancelar aqui dentro garante que nenhum clone fica pela metade
+        // com a limpeza por rodar.
+        let signal = async move {
+            shutdown_signal(notify).await;
+            jobs.shutdown().await;
+        };
 
         axum::serve(self.listener, router(self.state))
             .with_graceful_shutdown(signal)
@@ -367,6 +435,14 @@ pub async fn bind(preferred: Option<u16>) -> Result<Bound, ServeError> {
         csrf: Secret::generate()?,
         instance_id: Secret::generate()?.as_str()[..INSTANCE_ID_LEN].to_owned(),
         port: addr.port(),
+        settings: Arc::new(config::Settings::load()),
+        repos: Arc::new(repos::Registry::default()),
+        index: Arc::new(porc_index::Index::open_or_memory(
+            porc_index::Index::default_path().as_deref(),
+        )),
+        jobs: Arc::new(jobs::Jobs::default()),
+        #[cfg(unix)]
+        prompts: Arc::new(askpass::Prompts::default()),
         shutdown: Arc::new(tokio::sync::Notify::new()),
     };
 

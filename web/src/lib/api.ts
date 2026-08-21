@@ -54,6 +54,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(response.status, detail || `${method} ${path} falhou`);
   }
 
+  // 204 é a resposta certa para quem apagou alguma coisa, e não tem corpo para parsear.
+  if (response.status === 204) return undefined as T;
+
   return (await response.json()) as T;
 }
 
@@ -61,6 +64,7 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
+  del: <T = void>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
 /**

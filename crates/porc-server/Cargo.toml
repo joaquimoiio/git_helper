@@ -16,7 +16,11 @@ dev-proxy = ["dep:hyper", "dep:hyper-util"]
 embed-web = ["dep:rust-embed", "dep:mime_guess"]
 
 [dependencies]
+porc-git.workspace = true
+porc-index.workspace = true
+
 axum.workspace = true
+directories.workspace = true
 getrandom.workspace = true
 hyper = { workspace = true, optional = true }
 hyper-util = { workspace = true, optional = true }
@@ -24,9 +28,12 @@ mime_guess = { workspace = true, optional = true }
 rust-embed = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true

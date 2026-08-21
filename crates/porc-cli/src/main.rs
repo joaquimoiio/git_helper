@@ -1,6 +1,7 @@
 //! `porc` — ponto de entrada. Flags, lockfile, abertura do navegador e modos helper
 //! (askpass, sequence-editor). Não conhece git nem HTTP.
 
+mod askpass;
 mod browser;
 mod cli;
 mod lock;
@@ -16,6 +17,14 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Antes do `clap` e antes do log: quando o `git` nos executa como helper de senha, ele passa
+    // o prompt em `argv[1]` — texto livre, que o `clap` recusaria como subcomando desconhecido.
+    // Quem denuncia o modo é a variável de ambiente, que só existe no ambiente que nós montamos
+    // para o processo filho.
+    if let Some((socket, prompt)) = askpass::requested() {
+        return askpass::run(&socket, &prompt);
+    }
+
     let args = cli::Cli::parse();
 
     init_tracing();

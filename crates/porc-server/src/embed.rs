@@ -34,7 +34,11 @@ const CACHE_REVALIDATE: &str = "no-cache";
 
 pub async fn serve(headers: HeaderMap, uri: Uri) -> Response {
     let requested = uri.path().trim_start_matches('/');
-    let requested = if requested.is_empty() { INDEX } else { requested };
+    let requested = if requested.is_empty() {
+        INDEX
+    } else {
+        requested
+    };
 
     let path = match Assets::get(requested) {
         Some(_) => requested,

@@ -6,3 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# `default-features = false` desliga `https`, `ssh` e `ssh_key_from_memory` do libgit2.
+# Tudo que vai à rede é shell-out para o `git` do sistema — justamente para herdar credential
+# helper, SSH agent e LFS. Ligar TLS e libssh2 aqui só somaria dependência de build e
+# superfície de ataque para código que nunca vamos chamar.
+git2 = { workspace = true }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
