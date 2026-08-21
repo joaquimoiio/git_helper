@@ -1,0 +1,17 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Frontend
+node_modules/
+web/dist/
+*.local
+
+# Sistema
+.DS_Store
+
+# Dados locais do app (nunca versionar)
+*.db
+*.db-wal
+*.db-shm
+porc.lock
