@@ -25,6 +25,9 @@
 pub mod clone;
 pub mod error;
 pub mod init;
+pub mod path_filter;
+pub mod stage;
+pub mod status;
 
 use std::{
     path::Path,
@@ -194,7 +197,18 @@ pub async fn run(mut command: Command, timeout: Duration) -> Result<Output, Exec
     })
 }
 
-/// Comando de rede que fala enquanto trabalha: cada chunk de stderr chega ao chamador na hora.
+/// Qual pipe [`stream`] lê. O outro fica sem uso — quem chama é responsável por não deixá-lo
+/// em `piped()` sem ninguém lendo, senão um comando que escrever bastante ali trava esperando
+/// o pipe esvaziar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pipe {
+    /// Progresso de rede (`clone`, `fetch`): o git escreve `--progress` no stderr.
+    Stderr,
+    /// Dado de verdade (`log`, pickaxe): o resultado do comando é o stdout.
+    Stdout,
+}
+
+/// Comando que fala enquanto trabalha: cada chunk do pipe escolhido chega ao chamador na hora.
 ///
 /// **O relógio aqui é de inatividade, não de duração.** Um clone legítimo de um repositório
 /// grande passa dos trinta segundos do [`LOCAL_TIMEOUT`] com folga; o que não é legítimo é ficar
@@ -206,6 +220,7 @@ pub async fn stream<F>(
     mut command: Command,
     cancel: CancellationToken,
     idle: Duration,
+    pipe: Pipe,
     mut on_chunk: F,
 ) -> Result<(), ExecError>
 where
@@ -217,16 +232,26 @@ where
     })?;
 
     let pid = child.id();
-    let mut stderr = child
-        .stderr
-        .take()
-        .expect("o `command` desta casa sempre põe stderr em pipe");
+    let mut reader: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match pipe {
+        Pipe::Stderr => Box::new(
+            child
+                .stderr
+                .take()
+                .expect("o `command` desta casa sempre põe stderr em pipe"),
+        ),
+        Pipe::Stdout => Box::new(
+            child
+                .stdout
+                .take()
+                .expect("o `command` desta casa sempre põe stdout em pipe"),
+        ),
+    };
 
     let mut buffer = [0u8; 8 * 1024];
 
     loop {
         tokio::select! {
-            read = tokio::time::timeout(idle, stderr.read(&mut buffer)) => {
+            read = tokio::time::timeout(idle, reader.read(&mut buffer)) => {
                 match read {
                     // Silêncio longo demais. Um prompt de senha não trava aqui
                     // (`GIT_TERMINAL_PROMPT=0`), mas rede pendurada, sim.
@@ -235,7 +260,7 @@ where
                         let _ = tokio::time::timeout(GRACE, child.wait()).await;
                         return Err(ExecError::Timeout(idle));
                     }
-                    // EOF: o git fechou o stderr, então acabou.
+                    // EOF: o git fechou o pipe, então acabou.
                     Ok(Ok(0)) => break,
                     Ok(Ok(read)) => on_chunk(&buffer[..read]),
                     Ok(Err(err)) => return Err(ExecError::Spawn(err)),

@@ -180,7 +180,7 @@ where
 
     let mut splitter = progress::Splitter::default();
 
-    let outcome = exec::stream(git, cancel, IDLE_TIMEOUT, |chunk| {
+    let outcome = exec::stream(git, cancel, IDLE_TIMEOUT, exec::Pipe::Stderr, |chunk| {
         for update in splitter.push(chunk) {
             on_event(progress::parse(&update));
         }

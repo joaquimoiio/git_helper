@@ -18,6 +18,8 @@ import { NewRepo } from "../features/browse/NewRepo";
 import { Recents } from "../features/browse/Recents";
 import { AskpassPrompt } from "../features/jobs/AskpassPrompt";
 import { JobsPanel } from "../features/jobs/JobsPanel";
+import { CommitDetail } from "../features/log/CommitDetail";
+import { Log } from "../features/log/Log";
 import type { Repo } from "../lib/api-types";
 import { useJobEvents, useStartTestJob } from "../lib/jobs";
 import { useLayout } from "../lib/layout";
@@ -136,8 +138,8 @@ function Center({ repo }: { repo: Repo | undefined }) {
 
   if (repo) {
     return (
-      <main className="flex-1 min-w-0 min-h-0 overflow-y-auto bg-n-0">
-        <div className="px-3 py-2 border-b border-n-5">
+      <main className="flex-1 min-w-0 min-h-0 flex flex-col bg-n-0">
+        <div className="px-3 py-2 border-b border-n-5 shrink-0">
           <p className="text-base text-n-11">{repo.name}</p>
           <p className="mt-0.5 text-sm font-mono text-n-9">
             {repo.head.kind === "unborn"
@@ -145,7 +147,7 @@ function Center({ repo }: { repo: Repo | undefined }) {
               : `${repo.branch} · ${repo.head.commit.slice(0, 12)}`}
           </p>
         </div>
-        <p className="px-3 py-2 text-sm text-n-8">o log chega no Bloco D.</p>
+        <Log repoId={repo.repoId} />
       </main>
     );
   }
@@ -177,23 +179,13 @@ function Detail({ width, repo }: { width: number; repo: Repo | undefined }) {
   return (
     <aside className="shrink-0 overflow-y-auto border-l border-n-5 bg-n-1" style={{ width }}>
       {repo ? (
-        <dl className="text-sm">
-          {(
-            [
-              ["caminho", repo.path],
-              ["head", repo.head.kind],
-              ["branch", repo.branch],
-              ["commit", repo.head.kind === "unborn" ? "—" : repo.head.commit],
-              ["bare", repo.bare ? "sim" : "não"],
-              ["repo id", repo.repoId],
-            ] as const
-          ).map(([label, value]) => (
-            <div key={label} className="px-3 py-1 border-b border-n-5">
-              <dt className="text-xs uppercase tracking-[0.1em] text-n-8">{label}</dt>
-              <dd className="font-mono text-n-10 break-all">{value}</dd>
-            </div>
-          ))}
-        </dl>
+        // Repositório sem commit nenhum (`unborn`): não há o que selecionar no log, então não
+        // há detalhe de commit para mostrar — só o repositório em si.
+        repo.head.kind === "unborn" ? (
+          <p className="px-3 py-2 text-sm text-n-9">sem commits ainda neste repositório.</p>
+        ) : (
+          <CommitDetail repoId={repo.repoId} />
+        )
       ) : (
         <p className="px-3 py-2 text-sm text-n-9">o detalhe do que estiver selecionado vem aqui.</p>
       )}

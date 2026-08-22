@@ -5,10 +5,10 @@
 
 ## Onde estamos
 
-- **Bloco atual:** D — log (o coração)
-- **Último passo concluído:** Passo 35 — `GET /api/v1/repos/{id}/log` paginado por cursor
-- **Próximo passo:** Passo 36 — lista virtualizada do log (TanStack Virtual + infinite query)
-- **Comando para retomar:** `/blocao D` (ou `/bloco D` para o modo passo-a-passo)
+- **Bloco atual:** E — trabalho local
+- **Último passo concluído:** Passo 48a — `exec::stage` (`git add`/`git reset`) + `POST /stage` e `/unstage`
+- **Próximo passo:** Passo 48b — painel de status na UI (stage/unstage por arquivo e em lote, teclado, refresh otimista)
+- **Comando para retomar:** `/blocao E` (ou `/bloco E` para o modo passo-a-passo)
 
 ## Mapa dos blocos
 
@@ -17,8 +17,8 @@
 | A | servidor de pé | 1–12 | **concluído** (12/12) |
 | B | frontend de pé | 13–22 | **concluído** (10/10) |
 | C | abrir repositório | 23–34 | **concluído** (12/12) |
-| D | log (o coração) | 35–46 | em andamento (1/12) |
-| E | trabalho local | 47–56 | pendente |
+| D | log (o coração) | 35–46 | **concluído** (12/12) |
+| E | trabalho local | 47–56 | em andamento (1/10) |
 | F | branches e remoto | 57–72 | pendente |
 | G | merge e conflitos | 73–79 | pendente |
 | H | resto | 80–96 | pendente |
@@ -70,6 +70,27 @@
 | 33 | Askpass por socket unix efêmero (0600) + `AskpassPrompt` na UI; prompt sobrevive a reload | 2026-08-21 |
 | 34 | `exec/error.rs`: stderr → frase + ação sugerida; "ver detalhes" na UI (**Bloco C concluído**) | 2026-08-21 |
 | 35 | `GET /repos/{id}/log`: revwalk paginado por cursor opaco (fronteira), 500 por página | 2026-08-21 |
+| 36 | `CommitList`: TanStack Virtual + infinite query, linha slim, teclado j/k/setas/Home/End/PageUp/Down | 2026-08-22 |
+| 37 | Lanes do grafo no `log()`: algoritmo incremental, cursor `v2` carrega o estado inteiro | 2026-08-22 |
+| 38 | `LogGraph`: `<canvas>` sobreposto à lista, redesenhado no mesmo render do scroll | 2026-08-22 |
+| 39a | `GET /repos/{id}/refs`: branches, remotas, tags e HEAD destacado, sem paginação | 2026-08-22 |
+| 39b | `RefBadges` na linha do commit: `useRefs` + mapa oid→marcadores, sem estourar a linha | 2026-08-22 |
+| 40a | `GET /repos/{id}/commits/{oid}`: mensagem completa, assinaturas, diffstat por arquivo | 2026-08-22 |
+| 40b | `CommitDetail`: mensagem, assinaturas, pais clicáveis e lista de arquivos no painel direito | 2026-08-22 |
+| 41a | `GET /repos/{id}/commits/{oid}/diff?path=`: hunks estruturados por arquivo, sob demanda | 2026-08-22 |
+| 41b | `FileDiffView`: modo unificado e lado a lado, realce leve por token, avisos de binário/não-UTF8 | 2026-08-22 |
+| 42 | Job de indexação (`porc-index::commits` + `walk_for_index` + `index_job`), disparado ao abrir | 2026-08-22 |
+| 43a | `commits_fts` (FTS5) + `GET /repos/{id}/search?q=`: prefixo, incremental, entrada perigosa não quebra | 2026-08-22 |
+| 43b | `Log` (`SearchBox` + `SearchResults`): busca com debounce, sem janela separada, lista achatada | 2026-08-22 |
+| 44a | `search_commits` ganha hash prefixado (com índice, sem FTS5), `autor:`, `depois:`, `antes:` | 2026-08-22 |
+| 44b | `SearchResults` seleciona sozinho quando a busca parece hash e acha exatamente um commit | 2026-08-22 |
+| 45a | `exec::Pipe` (stdout genérico) + `parse::records` + job `path-filter`: `git log -z -- <path>` | 2026-08-22 |
+| 45b | `list_paths` (git2, árvore de HEAD) + `GET /repos/{id}/paths?prefix=`: autocomplete por nível | 2026-08-22 |
+| 45c | `PathFilter` + `FlatCommitList` extraído da busca; progresso/cancelar de graça via `JobsPanel` | 2026-08-22 |
+| 46a | `path_filter::by_content` (`-S`/`-G`) + job `pickaxe` com `handle.hit()` por commit achado | 2026-08-22 |
+| 46b | `PickaxeFilter`: cancela e reinicia a cada tecla, lista cresce ao vivo pela cauda `hits` (**Bloco D concluído**) | 2026-08-22 |
+| 47 | `GET /repos/{id}/status`: `git status --porcelain=v2 -z` + parser + `git2::state()`, agrupado em staged/unstaged/untracked | 2026-08-22 |
+| 48a | `exec::stage` (`add`/`reset` por lista de caminhos) + `POST /repos/{id}/stage` e `/unstage`, devolvendo o status atualizado | 2026-08-22 |
 
 ## Decisões tomadas que valem para o futuro
 
@@ -180,6 +201,79 @@
   que sem a mudança deixaria o bundle em 401). Regra 4 é mais forte que a regra 2.
 - **2026-08-21** — `page.rs` foi removido: quem serve `/` agora é o `fallback` (Vite em
   debug, `rust-embed` em release).
+
+- **2026-08-22** — **Bloco E começou.** O Passo 47 tocou 8 arquivos (`exec/status.rs` e
+  `parse/status_v2.rs` novos, mais `exec/mod.rs`/`parse/mod.rs` para registrar os dois,
+  `model.rs`, `read.rs`, `routes/repos.rs`, `lib.rs`), acima do limite de 3-4. Não deu para
+  cortar: um endpoint de status precisa do shell-out, do parser, dos tipos de domínio, da
+  leitura de estado via git2 e da rota — tirar qualquer um deixaria o passo pela metade, e a
+  regra 4 (compila e roda) é mais forte que a regra 2. Mesmo raciocínio do Passo 1 e dos
+  Passos 19/20.
+- **2026-08-22** — **`status` shell-out, `state()` (merge/rebase) via `git2`** — as duas fontes
+  do `CLAUDE.md`/`BLOCO-E.md`, mas juntas numa rota só. `RepoRead::state()` cresce o trait do
+  jeito que ele já vinha crescendo desde o Bloco D (`refs`, `commit_detail`…): usa
+  `git2::Repository::state()`, que só olha a presença de marcadores em disco
+  (`MERGE_HEAD`, `rebase-merge/`…) — barato, e por isso não vale a pena reimplementar como
+  teste de disco próprio (diferente do `discover::is_repo`, que existe justamente para não
+  abrir um `Repository` por entrada listada).
+- **2026-08-22** — `git status --porcelain=v2 -z` **não é streaming**: roda com `exec::run`
+  (não `exec::stream`), sob o `LOCAL_TIMEOUT` de 30s como o `init`. É rápido e local — mesmo
+  numa worktree de milhares de arquivos, não é o tipo de comando que fica minutos calado.
+- **2026-08-22** — Com `-z`, **todo** o formato porcelain v2 termina em NUL, inclusive o
+  cabeçalho `# branch.*` — confirmado por `xxd` contra o stdout real do `git` deste
+  repositório antes de escrever o parser, mesma disciplina do Passo 45. A única entrada com
+  **dois** NULs por registro é o rename/copy (tipo `2`): o caminho antigo é o registro NUL
+  seguinte inteiro, não um campo dentro do mesmo registro — por isso `parse::status_v2::parse`
+  não separa por linha e sim consome um registro extra da própria iteração quando vê tipo `2`.
+- **2026-08-22** — Um arquivo com `X` e `Y` diferentes de `.` (parcialmente stageado, ex.
+  `MM`) vira **duas** `StatusEntry`, uma em `staged` e outra em `unstaged` — o mesmo arquivo
+  nos dois grupos, igual ao que o `git status` de terminal mostra em duas seções. Verificado
+  ponta a ponta: `crates/porc-git/src/lib.rs` com uma linha stageada e outra não apareceu nos
+  dois grupos na resposta HTTP real.
+- **2026-08-22** — Conflito (`u`, linha de unmerged) vira `StatusKind::Unmerged` dentro de
+  `unstaged` — o Passo 47 pede três grupos, não quatro, e um quarto grupo "conflitos" fica
+  para o Bloco G, que é quem de fato faz algo com ele (marcar ours/theirs, resolver). Por ora
+  o objetivo é só não escondê-lo.
+- **2026-08-22** — `WorktreeStatus.state` nasce sempre `RepoState::Clean` dentro de
+  `parse::status_v2::parse` (a função só vê o stdout do `status`, que não carrega essa
+  informação) e é sobrescrito pela rota depois de chamar `RepoRead::state()` — duas fontes,
+  uma struct só, montada em dois passos em vez de uma terceira função que as combinasse.
+- **2026-08-22** — Aceite do Passo 47 (2026-08-22): `cargo test --workspace` — 129 testes,
+  tudo verde (17 novos: 2 de `exec::status`, 12 de `parse::status_v2`, 2 de `read::state`).
+  Clippy e `cargo fmt --check` limpos. Handshake HTTP completo contra este próprio
+  repositório: sujei a worktree de propósito (uma linha stageada e outra não no mesmo
+  arquivo, um `.gitignore` renomeado com `git mv` para exercitar o tipo `2`, um arquivo novo
+  não rastreado) e `GET /status` devolveu exatamente os três grupos certos — `crates/porc-
+  git/src/lib.rs` nos dois (`staged`/`unstaged`), o rename com `oldPath: ".gitignore"` e
+  `kind: "renamed"`, o arquivo novo em `untracked`. Estado limpo depois de desfazer tudo.
+
+- **2026-08-22** — **Passo 48 quebrado em 48a (backend) e 48b (frontend)**: não havia rota
+  nenhuma de mutação de git ainda (`stage`/`unstage` não existiam em lugar algum), então o
+  passo "stage e unstage por arquivo" precisava tanto do shell-out quanto da rota antes de a
+  UI ter o que chamar — juntar os dois passaria do limite de 3-4 arquivos (backend sozinho já
+  usa 4: `exec/stage.rs`, `exec/mod.rs`, `routes/repos.rs`, `lib.rs`). Mesmo raciocínio do
+  25a/25b, 39a/39b etc.
+- **2026-08-22** — `exec::stage::add`/`reset` são só `git add -- <paths>` / `git reset --
+  <paths>`, sem `-A` e sem pathspec vazio nunca: a rota rejeita `paths` vazio com 400
+  (`RepoError::NoPaths`) antes de chamar o git — "selecionar tudo" é resolvido no cliente
+  (que já tem a lista do último `status`), não um flag que o servidor interpreta.
+- **2026-08-22** — `git reset -- <paths>` (não `git restore --staged`) para unstage: mais
+  antigo, mais universalmente entendido, e funciona igual com `HEAD` unborn (testado —
+  `reset_desfaz_o_add` roda num repo recém-`init`ado sem nenhum commit). `git restore` exige
+  git ≥ 2.23; o piso do projeto é 2.30, então os dois serviriam, mas `reset` é o que todo
+  material sobre porcelain v2 já assume.
+- **2026-08-22** — `POST /stage` e `/unstage` devolvem o `WorktreeStatus` já atualizado (não
+  `204`/`{"ok":true}`): a mutação e a releitura são baratas as duas (comando local, sem
+  streaming), e devolver o estado novo poupa a UI de um segundo round-trip só para saber se
+  o clique funcionou. `read_status` virou função compartilhada entre `status`, `stage` e
+  `unstage` — as três rotas combinam as duas mesmas fontes (`exec::status` + `git2::state()`).
+- **2026-08-22** — Aceite do Passo 48a (2026-08-22): `cargo test --workspace` — 132 testes,
+  tudo verde (3 novos em `exec::stage`, incluindo stage em lote de dois arquivos de uma vez).
+  Clippy e `cargo fmt --check` limpos. Handshake HTTP completo contra este próprio
+  repositório: sujei a worktree com um arquivo novo, `POST /stage` moveu ele de `untracked`
+  para `staged` na resposta, `POST /unstage` devolveu para `untracked`, e `paths: []`
+  devolveu 400 sem tocar o git. Estado limpo depois (nada ficou staged, arquivo de teste
+  removido).
 
 - **2026-08-21** — O confinamento do `fs/list` é em três camadas, nesta ordem: componente
   `..` no pedido → 403 sem tocar o disco; `fs::canonicalize` (404 se não existe); prefixo
@@ -416,6 +510,414 @@
   é `GitError::InvalidCursor` → **400**, não 500: é pedido malformado, não falha de leitura.
   O `warn` de "falha lendo repositório" passou a casar só com `GitError::Read`.
 
+- **2026-08-22** — `useLog` (`web/src/lib/log.ts`) é um `useInfiniteQuery` que achata as páginas
+  num array só de `Commit`, memoizado. `staleTime: Infinity`: nada por baixo dos pés muda o log
+  enquanto a aba está aberta — quem vai invalidar isso é o WebSocket (`repo.changed`) no Bloco E,
+  não `refetchOnWindowFocus`.
+- **2026-08-22** — `CommitList` usa altura de linha **fixa** (22px, `estimateSize` sem medição),
+  não `measureElement`: a linha é sempre uma única linha de texto truncado, então medir custaria
+  um layout por linha para um valor que nunca varia. É o que permite ao `TanStack Virtual` pular
+  direto para qualquer índice sem esperar o DOM.
+- **2026-08-22** — O `useEffect` que busca a próxima página olha o **último item virtualizado**
+  (`items.at(-1)`), não um sentinela de rolagem à parte: o virtualizador já sabe exatamente quais
+  índices estão visíveis, e um segundo observador (IntersectionObserver) duplicaria essa
+  informação. `move()` (teclado) também pode disparar a busca — `Home`/`End`/`PageDown` andam
+  mais rápido que a rolagem por mouse e não podem esperar o próximo scroll para pedir mais.
+- **2026-08-22** — Teclas de navegação são **j/k** além de setas (convenção vim, que o público do
+  TortoiseGit-mas-teclado espera), com `PageUp`/`PageDown` medindo a viewport real
+  (`clientHeight / ROW_HEIGHT`) em vez de um salto fixo de 10 como no `FolderBrowser` — linhas de
+  log são bem mais numerosas por tela que entradas de pasta.
+
+- **2026-08-22** — O cursor virou **`v2`**: não guarda mais só a fronteira do revwalk (os oids
+  ainda por emitir), guarda o **estado inteiro das lanes** — cada coluna, livre ou esperando um
+  oid, incluindo as livres **no meio** do vetor. É a posição de uma lane livre que decide onde a
+  próxima página aloca uma lane nova; sem isso, duas páginas do mesmo grafo poderiam empacotar as
+  colunas de jeitos diferentes dos dois lados da emenda. Lanes livres **no final** são cortadas
+  do cursor (não mudam decisão nenhuma, só o tamanho). Um `v1` velho não decodifica como `v2` —
+  é exatamente para isso que o prefixo de versão existe.
+- **2026-08-22** — O algoritmo de lanes não usa fila/pilha separada: ele *é* o `lanes: Vec<Option<Oid>>`
+  mutado durante o próprio loop do revwalk, sem estrutura auxiliar. Cada commit emitido é
+  casado contra a(s) lane(s) que o esperavam (`Sort::TOPOLOGICAL` garante que todo commit
+  emitido foi esperado por pelo menos uma); múltiplas lanes esperando o mesmo oid — o caso
+  normal de dois branches reconvergindo numa base comum — colapsam na de menor índice e as
+  outras se libertam. Pai que não existe no odb (fronteira de clone raso) não ganha lane: a
+  linha termina ali de verdade, diferente de um pai que só ainda não chegou nesta *página*
+  (isso o cliente decide sozinho comparando oid, Passo 38).
+- **2026-08-22** — `Commit.parentLanes` é `(number | null)[]`, não `number[]`: `null` é
+  especificamente a fronteira de clone raso. Não confundir com "o commit desse pai ainda não
+  carregou" — a coluna já é conhecida (não é `null`) mesmo antes de o commit chegar; é assim que
+  o Passo 38 consegue desenhar um stub na coluna certa sem esperar a página que o materializa.
+- **2026-08-22** — Testes do algoritmo usam um repositório sintético **fork + merge** construído
+  direto com `git2` (commits/blob/tree via API, sem `git init` externo nem `tempfile`): é o menor
+  histórico que obriga tanto a convergência (duas lanes esperando o mesmo pai) quanto o
+  nascimento de lane nova (segundo pai de um merge). O teste de paginação compara, commit a
+  commit, `(oid, lane, parentLanes)` obtidos de uma vez só contra os mesmos obtidos com
+  `limit=1` — a emenda de página mais extrema possível.
+
+- **2026-08-22** — `LogGraph` não tem laço de animação próprio: ele lê `items` e
+  `virtualizer.scrollOffset` no mesmo render que reposiciona as linhas de texto em
+  `CommitList` (o `useVirtualizer` já dispara esse render a cada passo de rolagem) e redesenha
+  num `useEffect`. Dois relógios (um `requestAnimationFrame` à parte para o canvas, outro para
+  o DOM) é como grafo e lista ficam visivelmente defasados um do outro durante a rolagem.
+- **2026-08-22** — A cor do traço/nó vem de um `<span>` de tamanho zero com a classe do token
+  (`text-n-7`/`text-n-10`) lido via `getComputedStyle` uma vez por redesenho, não hardcoded:
+  `canvas` não entende `var()` nem `light-dark()` diretamente, e é assim que o grafo respeita o
+  tema sem duplicar a paleta em JS.
+- **2026-08-22** — Aresta cujo pai ainda não carregou (página seguinte) vira um coto curto de
+  tamanho fixo com uma marca — nunca uma linha até uma posição calculada, porque o cliente não
+  sabe a que distância o destino está antes de a página chegar. `rowOf` (oid → índice) é
+  recalculado só quando `commits` muda, e é essa mesma memoização, recalculada depois que a
+  página seguinte chega, que faz a aresta "materializar" sozinha — sem código dedicado para
+  completar arestas pendentes.
+- **2026-08-22** — A largura da faixa do grafo (`gutterWidth`) é a maior lane já vista entre
+  `commit.lane` **e** `commit.parentLanes`, não só a primeira: uma lane pode já ter sido
+  alocada como destino de um merge antes de qualquer commit carregado ocupá-la de fato.
+  Recalculada por `useMemo` sobre `commits` — uma vez por página nova, nunca por quadro de
+  rolagem, no mesmo espírito do índice oid→linha do `LogGraph`.
+- **2026-08-22** — Arestas são retas (sem curva em S), inclusive as que mudam de lane entre
+  linhas adjacentes. O `canvas` recorta sozinho o que sai da própria altura, então uma aresta
+  para um pai carregado mas fora da tela não precisa de recorte manual — só o caso "pai ainda
+  não carregado" (sem posição nenhuma para mirar) precisa do coto. Curva suave é polimento
+  visual, não corretude; fica para depois se incomodar na prática.
+
+- **2026-08-22** — O Passo 39 foi quebrado em **39a (backend) e 39b (frontend)**, no mesmo
+  espírito do 25a/25b, 26a/26b etc.: `RefMarker`/`RefKind` + `refs()` + a rota sozinhos já
+  compilam, testam e respondem — a UI só ainda não os usa.
+- **2026-08-22** — `refs()` **não pagina** e não faz parte de `LogPage`: o número de branches,
+  remotas e tags de um repositório não cresce com o histórico (é da ordem de dezenas, no
+  máximo centenas), diferente dos commits. Repeti-las a cada página do log seria banda
+  desperdiçada; o cliente busca uma vez e cruza pelo `commit` (oid) contra o que o log já tem.
+- **2026-08-22** — Só refs **diretas** (`reference.kind() == Direct`) viram marcador. Uma ref
+  **simbólica** como `refs/remotes/origin/HEAD` (o ponteiro para a branch padrão do remoto) é
+  descartada: a branch real para a qual ela aponta (`origin/main`) já aparece na varredura como
+  ref direta, e listar as duas seria a mesma ponta duas vezes com nomes diferentes.
+- **2026-08-22** — Tag vira marcador via `reference.peel_to_commit()`, que resolve tanto uma
+  tag leve (a ref já é o commit) quanto uma anotada (a ref aponta para um objeto tag, que por
+  sua vez aponta para o commit) com o mesmo código. Tag para blob ou árvore — rara, mas válida
+  em git — não tem commit para marcar e é descartada, não vira erro.
+- **2026-08-22** — `HEAD` destacado ganha um `RefKind::Head` **à parte**, marcador sintético
+  com `name: "HEAD"`, em vez de tentar encaixar no `RefKind::Branch`: não há branch nenhuma
+  para nomear, e fingir uma abriria uma exceção no contrato ("toda `Branch` tem uma ref real
+  em `refs/heads/`") que o resto do código passaria a assumir.
+
+- **2026-08-22** — `useRefs` mora em `lib/repo.ts`, não em `lib/log.ts`: refs são propriedade
+  do **repositório** (existem independente de qualquer página do log carregada), a lista de
+  commits é que as consulta para decorar linhas — a mesma razão pela qual a rota não pagina.
+  `staleTime: Infinity` como o log, pelo mesmo motivo: quem vai invalidar isto é o WebSocket do
+  Bloco E, não um refetch por foco de janela.
+- **2026-08-22** — Diferenciação de `RefBadges` é só **traço e peso**, nunca cor: borda sólida
+  para branch/remota, tracejada para tag; a ponta do `HEAD` (`isHead`) preenchida
+  (`bg-n-6`) e em negrito, as outras só com borda. É a mesma regra do grafo — "sem
+  arco-íris" vale para toda marca no log, não só para as lanes.
+- **2026-08-22** — A lista de badges de uma linha tem `max-w-48 overflow-hidden`: um commit
+  com muitas tags trunca a lista de marcadores em vez de espremer a mensagem, que é a
+  informação principal da linha. Não existe "ver mais" ainda — se aparecer na prática, é
+  ideia para o Bloco F, que já vai ter uma tela própria de refs.
+
+- **2026-08-22** — O Passo 40 também foi quebrado em **40a (backend) e 40b (frontend)**, no
+  mesmo padrão do 25a/25b, 39a/39b etc.
+- **2026-08-22** — `commit_detail` faz o diff contra o **primeiro pai só** (contra a árvore
+  vazia, na raiz) — a mesma simplificação que `git show` usa por padrão num merge, sem `-m`.
+  Diff combinado dos dois lados de um merge é decisão de apresentação para revisitar se fizer
+  falta na prática; o Passo 41 (hunks de verdade) herda a mesma simplificação.
+- **2026-08-22** — `Diff::stats()` do git2 só dá o agregado do diff inteiro — não existe API
+  pronta para inserções/remoções **por arquivo**. A contagem por arquivo sai de
+  `Diff::foreach` com um `line` callback, somando `+`/`-` por caminho num `HashMap`; os dois
+  testes contra commits reais deste próprio repositório (`2cea64a`, raiz, 15 arquivos; `0b61c6f`,
+  50 arquivos) comparam esse agregado calculado à mão com o número que `git show --stat`
+  mostra, e com a soma dos arquivos individuais — os três batem.
+- **2026-08-22** — O oid do commit é validado e tratado como pedido malformado — **400**, não
+  404 — igual ao cursor do log: `GitError::InvalidCommit` cobre tanto hex inválido quanto oid
+  bem formado que não existe neste repositório. Mesmo raciocínio do Passo 35 para o cursor,
+  reaplicado aqui.
+
+- **2026-08-22** — Seleção de commit (`useCommitSelection`, `lib/commit.ts`) é uma store à
+  parte de `useRepoSelection`, não um campo a mais nela: clicar num **pai** no painel de
+  detalhe troca o assunto do painel sem mexer no cursor da lista — os dois só precisam
+  coincidir quando é o cursor do log que muda, nunca o contrário. Se fossem a mesma store,
+  qualquer navegação por pai teria que também mover (ou fingir que não move) a linha
+  destacada na lista.
+- **2026-08-22** — O `useEffect` que sincroniza `CommitList` → `useCommitSelection` depende só
+  de `[selected, commits, selectCommit]` — deliberadamente **não** depende de nada do painel
+  de detalhe. É essa assimetria que faz "clicar num pai" funcionar: o efeito só dispara quando
+  o cursor do log muda, e navegar pelos pais no painel não mexe nele.
+- **2026-08-22** — O painel de detalhe (`Detail` em `Shell.tsx`) parou de mostrar os metadados
+  do repositório (caminho, `head`, `repoId`) assim que há um commit para mostrar — a lista de
+  metadados era só um placeholder até o log existir. Repositório `unborn` (sem commit nenhum)
+  ainda cai numa mensagem própria, porque não há o que selecionar.
+- **2026-08-22** — Datas de assinatura são formatadas deslocando o `Date` pelo `offset` do
+  autor/committer e exibindo como se fosse UTC (`timeZone: "UTC"` no `toLocaleString`), com o
+  deslocamento mostrado à parte (`UTC±hh:mm`) — é o único jeito de o `Intl` mostrar o fuso de
+  quem assinou sem duplicar por cima do fuso do navegador de quem está lendo.
+
+- **2026-08-22** — O Passo 41 também foi quebrado em **41a (backend) e 41b (frontend)**.
+- **2026-08-22** — `GET .../diff` pede **um arquivo por vez** (`?path=`), não o commit inteiro:
+  um commit pode tocar centenas de arquivos, e mandar todos os hunks de uma vez na mesma
+  resposta seria o oposto de "sob demanda" — a UI só busca o diff do arquivo que o usuário
+  abriu. `path` é sempre o lado **novo** do delta (o mesmo valor que `FileChange.path` do
+  Passo 40 já devolveu), nunca o `oldPath` de um rename.
+- **2026-08-22** — **Descoberta que quase furou o teste do arquivo binário**: a flag `BINARY`
+  de um `DiffDelta` **não** vem preenchida por `diff_tree_to_tree` sozinho — o libgit2 só
+  inspeciona o conteúdo (a heurística de `\0` nos primeiros bytes) ao montar o `Patch` de
+  verdade. Testar `delta.flags()` **antes** de criar o `Patch` sempre dava `0x0`, até para o
+  `.woff2` mais óbvio; o que sai marcado é o `patch.delta()` **depois** do `Patch::from_diff`.
+  Confirmado com um binário ad hoc antes de mexer no código de produção. Sem esse teste, a
+  detecção de binário simplesmente não funcionaria nunca — silenciosamente, sem erro nenhum.
+- **2026-08-22** — `FileDiff` é enum de **três** formas (`Text`/`Binary`/`NotUtf8`), não hunks
+  vazios mais uma flag: um `Vec` vazio por "binário" obrigaria a UI a adivinhar por que não
+  tem hunk nenhum. Mesmo raciocínio do `Head` de três estados do Passo 25.
+  `NotUtf8` derruba o arquivo **inteiro**, não linha a linha: uma linha em UTF-8 e a seguinte
+  em mojibake (de `from_utf8_lossy`) seria pior que os dois avisos claros e separados.
+- **2026-08-22** — `FileNotInCommit` (caminho que este commit não tocou) é **404**, diferente
+  de `InvalidCommit`/`InvalidCursor` (**400**): o pedido está bem formado, é o recurso que não
+  existe — a mesma distinção que `RepoError::Unknown` já fazia para um `repo_id` desconhecido.
+
+- **2026-08-22** — Fechar o arquivo aberto ao trocar de commit é ajuste de estado **durante a
+  renderização** (comparar `oid` contra um `oidOfOpenFile` guardado e resetar os dois juntos se
+  divergirem), não um `useEffect`. O oxlint (`react(set-state-in-effect)`) sinalizou o efeito
+  original: `setState` síncrono dentro de `useEffect` é sempre um render a mais que o padrão
+  "ajustar estado durante o render" evita.
+- **2026-08-22** — Lado a lado pareia remoção com adição **por índice dentro da corrida**
+  (todas as remoções de um trecho contra todas as adições daquele mesmo trecho, na ordem),
+  não por semelhança de conteúdo (LCS). É a simplificação deliberada de um viewer leve: o lado
+  mais curto de uma corrida desigual fica com célula em branco, sem tentar adivinhar qual
+  linha "parece" com qual.
+- **2026-08-22** — Painel de detalhe é estreito demais para lista de arquivos e diff ao mesmo
+  tempo, então abrir um arquivo **substitui** a lista (com um "← caminho" para voltar) em vez
+  de expandir inline — mesma lógica de espaço que já vale para a lista de branches na sidebar.
+- **2026-08-22** — Diferente do resto do Passo 40/41, `useFileDiff` **não** tenta usar
+  `FileChange.binary` (já conhecido do diffstat) para pular a requisição de um arquivo binário:
+  o endpoint de diff já responde `{kind:"binary"}` de qualquer forma, e checar dos dois lados
+  seria duas fontes de verdade para a mesma pergunta. Uma requisição a mais por arquivo binário
+  é troco barato pela simplicidade.
+
+- **2026-08-22** — **Passo 42 não precisou de metade frontend**: o `JobsPanel` do Bloco C já é
+  genérico por `job.kind` (mostra fase, detalhe, barra indeterminada, "ver detalhes", cancelar
+  — sem `match` nenhum sobre o tipo do job), então um job `"index"` aparece e termina sozinho,
+  sem tocar em nenhum arquivo de `web/`. Confirmado batendo o job real por HTTP: aberto o
+  repositório, `GET /jobs` já trazia `kind:"index"` progredindo e depois `done` com
+  `result:{commits:N}`, exatamente o formato que o `JobsPanel` já sabe desenhar.
+  Diferente dos passos 25, 26, 28, 31, 39, 40, 41 (todos com metade de UI de verdade), este
+  ficou só no backend — dividir em "a/b" teria criado um "b" vazio.
+- **2026-08-22** — `index_job::maybe_spawn` desiste **sem criar job nenhum** em dois casos:
+  a) o repositório já está indexado até o `HEAD` atual; b) `Jobs::create` bate no teto de jobs
+  concorrentes (`MAX_RUNNING = 8`). No caso b) desiste em silêncio (`tracing::debug!`, não
+  `warn!`) — indexação não é essencial o bastante para brigar por vaga com um clone de
+  verdade, e o próximo repositório aberto tenta de novo.
+- **2026-08-22** — A indexação é **substituição total**, não delta real: `replace_commits`
+  apaga e reinsere tudo numa transação só, e o "pular se já indexado" olha só se
+  `indexed_tip == HEAD` atual — **não** o delta desde a última indexação que o `BLOCO-D.md`
+  descreve. É a simplificação deliberada da v1 (documentada, não escondida): correta sempre
+  (reindexar tudo nunca deixa o índice errado), só não é o mínimo de trabalho possível depois
+  de um único commit novo. Vira delta de verdade — parando o `walk_for_index` no primeiro oid
+  já conhecido — se o custo incomodar em repositórios muito grandes reabertos com frequência.
+- **2026-08-22** — Todos os commits ficam em memória (`Vec<CommitRow>`) até o fim da varredura,
+  em vez de gravar em lotes: `replace_commits` já é uma transação atômica por design (índice
+  velho intacto é sempre melhor que índice pela metade se o job morrer no meio), e gravar aos
+  pedaços quebraria essa garantia sem necessidade — 100k commits cabem em poucas dezenas de MB.
+- **2026-08-22** — Cancelamento é checado **a cada commit** dentro do fecho passado a
+  `walk_for_index` (`handle.is_cancelled()`), não só entre lotes: é barato (um load atômico) e
+  é o que faz cancelar um índice de 100k commits responder na hora, não no próximo lote de
+  2000.
+
+- **2026-08-22** — `commits_fts` é uma tabela FTS5 **à parte** de `commits`, não `content=`
+  externo com gatilhos: como `replace_commits` já apaga e reinsere tudo a cada reindexação
+  (Passo 42), sincronizar as duas manualmente na mesma transação é mais simples que manter
+  gatilhos de INSERT/UPDATE/DELETE que essa estratégia de substituição total nunca dispararia
+  de qualquer jeito (não há UPDATE linha a linha, só apagar tudo e inserir tudo de novo).
+- **2026-08-22** — Toda palavra da busca vira **frase entre aspas** (`"palavra"`) antes de
+  virar `MATCH`, com `"` interna dobrada (`""`) para escapar — é o que impede `AND`, `OR`,
+  `NOT`, `-prefixo` ou uma aspa solta digitados pelo usuário de virarem sintaxe de operador do
+  FTS5 e derrubarem a consulta. Só a **última** palavra ganha o sufixo `*` de prefixo: é o que
+  faz a letra recém-digitada já filtrar sem esperar a palavra terminar (a busca por mensagem e
+  autor tem que ser útil a cada tecla, não só em palavras completas) — teste dedicado cobre a
+  entrada perigosa (`AND`, `-erro`, aspa solta) não falhando.
+- **2026-08-22** — `q` vazia devolve lista vazia **sem consultar o SQLite**: no vocabulário
+  desta busca, caixa limpa é "sem filtro" (mostra o log inteiro), não "filtra por nada" (que
+  daria zero resultados se fosse tratado como consulta FTS5 de verdade — `MATCH ''` é erro de
+  sintaxe, não resultado vazio).
+- **2026-08-22** — O teste do orçamento de performance do Passo 43 usa **50 mil** linhas
+  sintéticas (maior que qualquer repositório real medido neste projeto até agora) e cobra
+  menos de 100ms — mais folgado que os 20ms do `BLOCO-D.md` de propósito, porque é `cargo test`
+  em debug, não o binário de release medindo de verdade; a intenção é pegar uma regressão
+  grosseira (ex.: um `LIKE` no lugar do `MATCH`), não validar a meta exata.
+- **2026-08-22** — `search_commits` devolve as linhas prontas (`author`, `email`, `time`,
+  `summary`), não só `oid`: o cliente pode mostrar um resultado de busca que **não está** numa
+  página do log já carregada (busca cobre o histórico inteiro indexado; a paginação do log só
+  cobre o que foi rolado até agora), então a resposta não pode depender de o commit já estar
+  na lista do cliente.
+
+- **2026-08-22** — Resultado de busca é uma **lista achatada** (`SearchResults`), sem grafo:
+  a busca cobre o histórico indexado inteiro, não só o que o log paginou até agora, e o
+  conjunto de resultados não é contíguo no grafo original — recalcular lanes para um
+  subconjunto arbitrário é problema bem maior que "busca por mensagem e autor" pede. Clicar
+  num resultado ainda preenche o painel de detalhe normalmente (`useCommitSelection` já era
+  independente da lista do log desde o Passo 40).
+- **2026-08-22** — Debounce mora em `lib/search.ts` (`useDebouncedValue`, genérico) e não no
+  componente: `useSearch` já recebe uma query estável, e a rota nunca vê um request por tecla
+  numa digitação normal — 150ms, curto o bastante para parecer ao vivo.
+- **2026-08-22** — Busca vazia (ou só espaço) é tratada **duas vezes**, de propósito: o
+  `Log` nem monta `SearchResults` (mostra `CommitList` normal), e `useSearch` também não
+  consulta o servidor se isso um dia mudar (`enabled: trimmed.length > 0`). Sem `content=`
+  externo nem gatilho FTS5, redundância barata é melhor que um dos dois lados divergir.
+
+- **2026-08-22** — O Passo 44 também foi quebrado em **44a (backend) e 44b (frontend)**. E,
+  diferente de todos os `a` anteriores neste bloco, o 44a **não tocou a rota**: `search_commits`
+  manteve a mesma assinatura, então `routes::repos::search` (Passo 43a) já passa a suportar
+  hash/`autor:`/`depois:`/`antes:` sem uma linha mudar — a sintaxe unificada é decisão de
+  parsing dentro do `porc-index`, não de contrato HTTP.
+- **2026-08-22** — Hash colado **pula o FTS5 inteiro**: um único token hex de 4-40 caracteres
+  vai direto a `WHERE repo_id=? AND oid LIKE 'prefixo%'` contra a tabela `commits` normal — "com
+  índice" no `BLOCO-D.md` quer dizer a chave primária `(repo_id, oid)`, não busca textual. Um
+  hash não é texto para relevância nenhuma; é um valor exato (até onde foi digitado).
+  Consequência aceita: uma palavra que por acaso só usa `a-f0-9` (`"cafe"`, `"deed"`, 4+
+  letras) também cai nesse caminho — a mesma ambiguidade que o próprio `git` tem com hashes
+  curtos, documentada e não meia-solução.
+- **2026-08-22** — Sem texto livre nenhum (só `autor:`/`depois:`/`antes:`, ou nada), a consulta
+  vai pela tabela `commits` normal (`ORDER BY ts DESC`), não pelo FTS5: relevância (`rank`) só
+  faz sentido quando há o que combinar por texto. Com texto livre presente, os filtros
+  estruturados viram condições extras na mesma consulta FTS5 (`AND author LIKE ? AND ts...`) —
+  é a mesma tabela `commits_fts` do Passo 43, só com mais `WHERE`.
+- **2026-08-22** — `AAAA-MM-DD` vira segundos-desde-a-época por conta própria
+  (`days_from_civil`, o algoritmo de Howard Hinnant para dia-civil→dias-desde-1970), sem
+  dependência de data nenhuma: é uma multiplicação e algumas divisões inteiras, e trazer um
+  crate de calendário para só isso seria peso para nada. `depois:` é inclusive, `antes:` é
+  **exclusive** — "antes do dia", não "até o dia" (`antes:2024-06-20` não inclui commits feitos
+  naquele dia).
+- **2026-08-22** — Token com prefixo reconhecido mas inválido (`autor:` vazio, `depois:` com
+  data que não parseia) é **ignorado silenciosamente**, não erro: `autor:` sozinho é um estado
+  passageiro normal no meio da digitação (o usuário ainda vai completar o nome), e derrubar a
+  busca inteira por causa disso seria pior que só não filtrar por aquele critério ainda.
+
+- **2026-08-22** — "Salta direto para o commit" é `useCommitSelection.select(oid)`, não uma
+  navegação de tela: o painel de detalhe já é independente da lista do log desde o Passo 40,
+  então preencher a seleção já é o suficiente para o commit aparecer — sem precisar sair da
+  busca, fechar a caixa ou trocar de view. O critério para disparar é estrito **de propósito**
+  (`HASH_LIKE.test(query) && results.data.length === 1`): mais de um resultado é ambíguo
+  (prefixo curto demais) e não dispara nada sozinho — o usuário escolhe clicando.
+  `HASH_LIKE` no cliente espelha `is_hash_like` do `porc-index` (mesma regra, 4-40 hex), mas
+  são só regex isoladas — não vale compartilhar código entre um binário Rust e um bundle JS
+  por uma linha de regex.
+
+- **2026-08-22** — O Passo 45 foi quebrado em **três**, não dois: **45a** (job de filtro por
+  caminho), **45b** (autocomplete de caminho) e **45c** (frontend) — os dois primeiros são
+  recursos de backend genuinamente independentes (um filtra o log, o outro lista arquivos da
+  árvore), e juntá-los no mesmo "a" passaria do limite de arquivos por passo sem necessidade.
+- **2026-08-22** — Filtro por caminho é **shell-out puro, sem SQLite e sem `porc-index`** —
+  decisão já fechada no `CLAUDE.md` ("paths de commits não são indexados"). `exec::stream`
+  (Passo 31, construído para o progresso do clone) só lia stderr; ganhou um parâmetro `Pipe`
+  (`Stdout`/`Stderr`) para este passo poder ler o **stdout** do `git log`, que é onde o
+  resultado de verdade sai — o clone continua lendo stderr, só passou a dizer isso
+  explicitamente (`Pipe::Stderr`) em vez de implícito no nome da função.
+- **2026-08-22** — `git log -z --format=%H%x00%an%x00%ae%x00%at%x00%s -- <path>` end-to-end
+  testado byte a byte (`xxd`) antes de escrever `RecordSplitter`: com `-z`, o git termina
+  **todo** campo do formato em NUL, inclusive o último de cada commit — não sobra `\n` nenhum
+  para confundir o parser. Sem essa checagem manual, a suposição errada mais provável seria
+  achar que só `-z` já bastava (sem `%x00` no format) ou vice-versa.
+- **2026-08-22** — `RecordSplitter` corta em bytes crus (`Vec<u8>`), não em `String` como o
+  `Splitter` do `--progress` (Passo 30): frontier de campo pode cair no meio de um caractere
+  multi-byte UTF-8, e só decodificar (`from_utf8_lossy`) depois de já ter um campo **completo**
+  evita partir um caractere ao meio entre dois `push()`.
+- **2026-08-22** — O job devolve o resultado **inteiro** em `job.done` (`{"commits": [...]}`),
+  não em pedaços pelo WebSocket — "streaming" aqui é entre o `git` e o servidor (stdout lido
+  aos poucos, sem carregar o histórico inteiro na memória do processo do git de uma vez), não
+  entre servidor e cliente. Entrega incremental de verdade para o cliente é do Passo 46
+  (pickaxe), cujo aceite exige "primeiros resultados quase de imediato" — o aceite deste passo
+  ("ver só os commits que tocam o arquivo") não pede isso, e implementá-lo aqui seria
+  antecipar trabalho que o passo seguinte já vai precisar fazer de qualquer forma.
+- **2026-08-22** — `path-filter` reaproveita `porc_index::commits::SearchHit` como formato do
+  resultado (mesmos campos: oid/author/email/time/summary), mesmo sem tocar o índice —
+  `porc-server` já depende de `porc-index` por outro caminho (a busca), e criar uma quarta
+  struct quase idêntica só para isto teria sido duplicação sem motivo. O nome "SearchHit" é um
+  pouco estranho aqui (isto não é FTS5), mas é exatamente a mesma forma de dado.
+
+- **2026-08-22** — Autocomplete de caminho é **git2**, não shell-out: diferente do filtro por
+  caminho em si (Passo 45a, que varre histórico e por isso é `git log` streaming), isto só lê a
+  árvore de `HEAD` — estrutura, não texto, exatamente a fronteira que o `CLAUDE.md` já traçava
+  entre os dois mundos.
+- **2026-08-22** — `list_paths` resolve o **diretório** do prefixo (`root_tree.get_path`) e
+  itera só aquele nível (`tree.iter()`, não recursivo), em vez de andar a árvore inteira e
+  descartar o que não bate: um monorepo com dezenas de milhares de arquivos tornaria uma
+  varredura completa por tecla digitada perceptível, enquanto listar um diretório é O(entradas
+  daquela pasta). Prefixo que resolve para um arquivo, ou para um caminho que não existe, é
+  "nada para completar" (`Ok(vec![])`), não erro — os dois são estados normais de alguém ainda
+  digitando.
+- **2026-08-22** — Diretório sai com `/` no final (`"crates/"`), arquivo sem: é o mesmo sinal
+  que um `ls` colorido dá, e é o que permite à UI decidir se o Enter/Tab deve continuar
+  completando ali dentro ou fechar a busca com aquele caminho.
+
+- **2026-08-22** — `FlatCommitList` foi **extraído** de `SearchResults` neste passo: a mesma
+  linha clicável (hash/mensagem/autor/data relativa) que a busca por mensagem já desenhava
+  serve sem alteração nenhuma para o filtro por caminho — os dois produzem exatamente
+  `SearchHit[]`. Extrair só quando a segunda cópia ia mesmo acontecer (não antes, no Passo 43)
+  é a mesma disciplina que "não repita até doer" pede.
+- **2026-08-22** — `PathFilter` **não reimplementa** progresso nem cancelar: o job
+  `path-filter` já aparece e termina sozinho no `JobsPanel` genérico (a mesma descoberta do
+  Passo 42 para o job de indexação), então a única peça nova de UI de fato é a caixa com
+  autocomplete e a lista de resultado — lidos do **mesmo** cache de jobs que o `JobsPanel` usa
+  (`usePathFilterJob` só faz `useJobs().data?.find(...)`), sem um caminho de estado paralelo.
+- **2026-08-22** — Mensagem e caminho são **dois botões na mesma faixa**, não uma segunda
+  linha acima da caixa: o painel de detalhe já é estreito (Passo 41 já bateu nesse limite), e
+  uma faixa a mais só para alternar de modo custaria altura que a lista de commits precisa
+  mais. `Tab` no campo de caminho completa para a primeira sugestão — se ela for uma pasta
+  (termina em `/`), o autocomplete do nível de dentro já dispara sozinho, sem código dedicado
+  a "descer um nível".
+
+- **2026-08-22** — `path_filter.rs` virou o lar dos **dois** filtros: `by_path` (Passo 45) e
+  `by_content` (este passo) compartilham o mesmo `run` interno (`git log -z --format=…` comum)
+  — só o argumento entre o formato e o `--` muda (`-- <path>` contra `-S<valor>`/`-G<valor>`).
+  Exatamente o reaproveitamento que o próprio comentário do módulo já previa desde o Passo 45,
+  sem precisar adivinhar a forma exata até este passo chegar de verdade.
+- **2026-08-22** — `-S<valor>`/`-G<valor>` vai **grudado num token só** (a sintaxe curta do
+  git), nunca `-S` e o valor como dois argumentos separados: um valor que começa com `-` ou
+  parece outra flag nunca é lido como tal, porque só existe *depois* do prefixo dentro do
+  mesmo item de `argv` — mesma defesa que o `--` já dava ao `by_path`, só que sem precisar do
+  `--` nenhum aqui (pickaxe não tem pathspec).
+- **2026-08-22** — **A entrega incremental de verdade nasce aqui**, não no Passo 45: `JobSnapshot`
+  ganhou `hits: Vec<Value>` (cauda capada em `LOG_TAIL`, igual ao `log`) e `ServerMessage`
+  ganhou `job.hit` — um evento por commit achado, publicado por `handle.hit()` de dentro do
+  próprio fecho de streaming do `git`, não acumulado para o fim. O `result` final do `done`
+  ainda carrega a lista **completa** (sem corte), então quem só olha o fim (reconectou tarde,
+  por exemplo) não perde nada — o corte só vale para a cauda ao vivo.
+- **2026-08-22** — Medido contra um repositório sintético de 6000 commits com conteúdo
+  alternado (`needle-marker-0`/`needle-marker-1` a cada commit, pensado para o `-S` mudar de
+  contagem quase toda vez): o job de pickaxe terminou em menos de 100ms, os `hits` da cauda já
+  vieram capados nos 200 mais recentes no primeiro poll. Rápido demais para observar
+  crescimento incremental por HTTP polling (o que é uma boa notícia de performance, não uma
+  falha de teste) — a garantia de que cada commit vira um evento **assim que é encontrado**,
+  não só no fim, está no teste direto de `jobs.rs` (`hit_publica_e_acumula_no_snapshot`), que
+  não depende de cronometrar operação nenhuma de git.
+- **2026-08-22** — `PathFilterStartError` virou **`RepoJobStartError`**: o mesmo par de erros
+  (`RepoError`/`JobsError`) que `path-filter` já usava serve `pickaxe` sem alteração — um
+  rename honesto para o que o tipo sempre foi, não uma generalização especulativa.
+
+- **2026-08-22** — "Cancelado e reiniciado a cada tecla" é uma **ref**, não outro `useState`:
+  o `jobId` da busca em andamento (`runningJobId`) precisa do valor de **antes** do efeito
+  rodar para cancelar o certo, e só depois passa a apontar para o novo — um `useState`
+  criaria uma corrida entre ler o valor antigo e gravar o novo dentro do mesmo efeito.
+- **2026-08-22** — Query vazia (`trimmedValue === ""`) é tratada **fora** do efeito
+  (`activeJobId = trimmedValue === "" ? null : jobId`, calculado durante a renderização), não
+  com um `setJobId(null)` dentro dele: o oxlint (`react(set-state-in-effect)`) pegou a versão
+  antiga — `setState` síncrono logo na entrada de um efeito quase sempre quer dizer que o
+  valor era derivável sem estado nenhum, e aqui era exatamente esse o caso.
+- **2026-08-22** — `startRef`/`cancelRef` guardam a mutação mais recente para o efeito chamar
+  sem precisar dela na lista de dependências (`start`/`cancel` são objetos novos a cada
+  render; colocá-los nas dependências reiniciaria a busca a cada render, não só a cada tecla
+  ou troca de modo). A atualização das refs mora num `useEffect` **próprio, sem lista de
+  dependências** (roda a cada render) — nunca escrita direto no corpo do componente: o oxlint
+  (`react(refs)`) sinalizou que gravar `ref.current` durante a renderização é o que o React
+  quer evitar, mesmo sendo um padrão comum em React "cru".
+- **2026-08-22** — Enquanto o job está `running`, a lista mostra `job.hits` (a cauda ao vivo,
+  capada em 200); assim que chega a `done`, passa a mostrar `job.result.commits` (a lista
+  completa, sem corte) — é a troca de fonte que faz a tela nunca "perder" resultados que
+  chegaram além da cauda, mesmo tendo mostrado só os últimos 200 enquanto a busca ainda corria.
+- **2026-08-22** — **Bloco D concluído.** As três buscas do log (mensagem/autor via FTS5,
+  caminho e conteúdo via shell-out streaming) compartilham a mesma casca de UI (`Log.tsx`, um
+  seletor de três modos numa faixa só) e o mesmo componente de lista achatada
+  (`FlatCommitList`), mas têm mecanismos de fundo completamente diferentes — índice SQLite
+  para uma, jobs canceláveis com `git log` streaming para as outras duas — exatamente a
+  divisão de fronteiras que o `CLAUDE.md` já desenhava antes de o bloco começar.
+
 ## Pendências / ideias anotadas
 
 - `POST /api/v1/ping` e `GET /api/v1/whoami` continuam provisórias (existem para exercitar
@@ -428,10 +930,22 @@
 - Falta a **checagem de `git >= 2.30` no boot**, que é decisão fechada do `CLAUDE.md` e não é
   passo de nenhum bloco. Não pode morar no `porc-cli` (ele não conhece git); o lugar é o
   `bind()` do `porc-server` chamando um `porc_git::exec::version()`.
-- Os aceites **visuais** dos Passos 17, 18, 22 e 24 (três painéis na densidade certa,
-  arrastar e recarregar, aba com título e ícone, navegar por teclado até um repo) foram
-  verificados por build limpo, lint limpo e inspeção do código, **não** num navegador de
-  verdade. Vale o usuário abrir uma vez.
+- Os aceites **visuais** dos Passos 17, 18, 22, 24, 36, 38, 39b, 40b, 41b, 43b, 44b e 45c (três
+  painéis na densidade certa, arrastar e recarregar, aba com título e ícone, navegar por
+  teclado até um repo, rolar o log sem engasgo, o grafo acompanhando a rolagem, os marcadores
+  de ref na linha certa, o painel de detalhe preenchendo ao selecionar, o diff de um arquivo de
+  texto e de um binário, a busca filtrando ao digitar, um hash colado saltando direto, o filtro
+  por caminho com autocomplete) foram verificados por build limpo, lint limpo, inspeção do
+  código e pelo contrato HTTP completo batido contra repositórios sintéticos e este próprio
+  repositório (3000 commits em linha reta para a paginação do Passo 36; um fork+merge de
+  verdade para `lane`/`parentLanes` no Passo 38; `main`/`isHead` no Passo 39a/b; o commit raiz
+  deste projeto batendo com `git show --stat` no Passo 40a/b; `web/src/app/Shell.tsx` e uma
+  fonte `.woff2` deste próprio histórico no Passo 41a/b; a busca por "passo" achando o commit
+  certo no Passo 43a/b; o hash `9db77b8` achando exatamente um commit no Passo 44a/b;
+  `PROGRESSO.md` trazendo os 3 commits certos e `crates/porc-` completando as 4 crates no
+  Passo 45a/b/c), **não** por clicar de verdade num navegador. Vale o usuário abrir uma vez,
+  medir o tempo até a primeira pintura e navegar pelo log com as refs, o detalhe, o diff, a
+  busca e o filtro por caminho num repositório de verdade, como o `BLOCO-D.md` pede.
 - Abrir uma pasta **dentro** de um repositório não abre o repositório (é `open`, não
   `discover`). Se isso incomodar na prática, o lugar de resolver é o `POST /api/v1/repos`,
   reconferindo o resultado do `discover` contra a raiz do confinamento.
@@ -461,9 +975,35 @@
   porque a rota de página não depende dele.
 - Falta o teto de commits por request na camada de `rate_limit` que ainda não existe. Hoje o
   que segura o log é só o clamp de `limit` em 2000 por página.
-- `Git2Repo::log` abre um `Repository` por chamada (é o padrão de todo o `read.rs`). Com
-  página de 500 isso é ruído; o pool de handles com semáforo previsto no `CLAUDE.md` só se
-  paga quando houver várias leituras por interação (diff + refs + log na mesma tela).
+- **[ATUALIZADA 2026-08-22, achado no aceite do Bloco D — ver "Ambiente verificado"]**
+  `Git2Repo::log` abre um `Repository` por chamada. A nota original ("com página de 500 isso é
+  ruído") **só valia para repositórios pequenos** — medido contra 100k commits, é o oposto de
+  ruído: é ~900ms na primeira página, quase 20× o orçamento de 50ms do `CLAUDE.md`. A causa
+  não é o `Repository::open` em si (< 1ms) nem o `find_commit`/`odb.exists` por commit (< 1ms
+  para os 500 juntos) — é o **primeiro `next()` do revwalk com `Sort::TOPOLOGICAL`**, sozinho,
+  que veio a ~900ms num diagnóstico isolado (linha a linha, com `Instant::now()` entre cada
+  etapa). O libgit2 pré-processa a alcançabilidade do histórico **inteiro** antes de devolver o
+  primeiro commit em ordem topológica — o custo é do tamanho do repositório, não da página, e
+  isso é verdade mesmo sem merge nenhum (testado numa cadeia linear de 100k commits). Duas
+  saídas possíveis, nenhuma tentada ainda: (a) o pool de handles com `Repository` de vida mais
+  longa que o `CLAUDE.md` já previa, se libgit2 reaproveitar o pré-processamento entre chamadas
+  do mesmo handle (a **segunda** chamada no mesmo processo, mesmo `Repository`, caiu para
+  ~140ms no diagnóstico — não é grátis, mas é bem menos ruim); (b) gerar um arquivo
+  `commit-graph` (`git commit-graph write --reachable`, o mesmo mecanismo que acelera `git log`
+  no próprio terminal) ao indexar (Passo 42 já faz uma varredura completa do histórico de
+  qualquer forma) e conferir se o libgit2 o usa para topológico rápido. Isto bloqueia a meta
+  "rola sem engasgo" do Bloco D em repositórios grandes de verdade — é a prioridade de
+  performance mais alta pendente ao entrar no Bloco E.
+- Arestas do `LogGraph` são retas, sem a curva em S que a maioria dos clientes gráficos usa
+  quando uma lane nasce ou morre entre duas linhas adjacentes. Funciona e é legível; é
+  polimento visual para revisitar se incomodar na prática, não bloqueia o passo.
+- `gutterWidth` não tem teto: um repositório com dezenas de branches abertas ao mesmo tempo
+  empurraria a faixa do grafo para uma largura grande, comendo espaço da lista de texto. Não é
+  o caso comum, e truncar exigiria decidir o que fazer com as lanes que ficassem de fora — vale
+  esperar aparecer de verdade antes de inventar a resposta.
+- O grafo não desenha nada para a fronteira de clone raso (`parentLane: null`): a linha
+  simplesmente para. Um marcador "histórico raso termina aqui" é ideia de polimento, não do
+  escopo do Passo 38.
 
 ## Ambiente verificado
 
@@ -485,3 +1025,153 @@
 - No macOS, config **e** dados ficam em `~/Library/Application Support/porcelain/`
   (`config.toml`, `porcelain.db`, `porc.lock`). No Linux é `~/.config/porcelain/` e
   `~/.local/share/porcelain/`.
+- Aceite do Passo 40b (2026-08-22): `npm run build` e `npm run lint` limpos. `cargo build
+  --release` embutiu o bundle novo (contém `formatSignatureDate`/o texto "selecione um commit
+  no log", confirmado por grep no JS servido). Sem passo de backend novo — reusa o
+  `/commits/{oid}` do 40a, já verificado ponta a ponta com números reais deste repositório.
+- Aceite do Passo 44b (2026-08-22): `npm run build` e `npm run lint` limpos. `cargo build
+  --release` embutiu o bundle novo (contém "colar um hash", confirmado por grep no JS
+  servido). Sem passo de backend novo — reusa o `search` do 44a, já verificado ponta a ponta
+  com hash real deste repositório (`9db77b8` → um resultado só).
+- **Aceite do Bloco D inteiro (2026-08-22)**, rodado uma vez ao fim, contra um repositório
+  sintético de **100.000 commits em cadeia linear** (`git fast-import`, criado em segundos):
+  boot do binário de release até servir: **18ms** (meta < 1s, ok). Abrir o repositório: 16ms.
+  Indexação de busca (Passo 42) dos 100k commits: **< 50ms**, já `done` no primeiro poll (meta
+  2-4s, folgadíssimo). Busca por mensagem (FTS5): 72ms medidos por HTTP, incluindo overhead de
+  processo do `curl` (meta < 20ms — o teste isolado em Rust já tinha medido < 100ms para 50k
+  linhas sem esse overhead; aceitável). **Primeira página do log: ~600-900ms, repetível em
+  requisições sucessivas — falha a meta de < 50ms em quase 20×.** Diagnosticado até a causa
+  exata (ver a pendência atualizada acima, "`Git2Repo::log` abre um `Repository` por chamada"):
+  não é `Repository::open`, não é `find_commit`/`odb.exists` por commit — é o **primeiro
+  `next()` do revwalk com `Sort::TOPOLOGICAL`**, que sozinho consumiu ~900ms num diagnóstico
+  isolado, porque o libgit2 pré-processa a alcançabilidade do histórico inteiro antes de
+  devolver o primeiro commit em ordem topológica. "Rola sem engasgo" **não está cumprido** em
+  repositórios grandes de verdade — a rolagem paga esse custo a cada página, não só na
+  primeira. A busca por conteúdo (pickaxe) não foi medida neste aceite final por tempo, mas já
+  tinha sido verificada ponta a ponta no Passo 46a contra 6000 commits com resultado correto e
+  rápido. Repositório de teste apagado ao final; nenhum arquivo de diagnóstico ficou no
+  projeto.
+- Aceite do Passo 46b (2026-08-22): `npm run build` e `npm run lint` limpos (dois avisos reais
+  do oxlint corrigidos de verdade, não suprimidos — ver decisões acima). `cargo build
+  --release` embutiu o bundle novo (contém "expressão regular"/"procurando os primeiros
+  resultados", confirmado por grep no JS servido). `cargo test --workspace` continua em
+  116/116 (nenhum arquivo Rust mudou neste passo). Sem passo de backend novo — reusa `pickaxe`
+  (46a), já verificado ponta a ponta com `-S`/`-G` batendo exatamente com o `git log` de
+  verdade e a cauda `hits` capada em 200.
+- Aceite do Passo 46a (2026-08-22): `cargo test -p porc-git` — 73 testes, incluindo os 5 novos
+  de `by_content` contra este próprio repositório (`-S"porcelain"` acha os 3 commits certos,
+  `-G"fn open\("` acha os 2 commits certos — os dois batendo com `git log -S`/`-G` de verdade
+  rodado na mão; sem ocorrência não falha, só vem vazio; cancelamento pré-armado devolve
+  `Cancelled`). `cargo test -p porc-server` — 25 testes, incluindo os 2 novos de `hit()`
+  (publica e acumula; corta a cauda em `LOG_TAIL` como o `log`). `cargo test --workspace` —
+  116 testes, tudo verde. Clippy e `cargo fmt --check` limpos. Handshake HTTP completo: um
+  repositório sintético de 6000 commits com conteúdo alternado deu 5999 acertos para
+  `-S"needle-marker-0"`, terminando `done` com o `result` completo e a cauda `hits` capada em
+  200; contra este próprio repositório, `-G"fn open\("` e uma busca sem ocorrência bateram
+  exatamente com o `git log` de verdade. Repositório de teste apagado ao final.
+- Aceite do Passo 45c (2026-08-22): `npm run build` e `npm run lint` limpos. `cargo build
+  --release` embutiu o bundle novo (contém "caminho do arquivo"/"nenhum commit tocou",
+  confirmado por grep no JS servido). `cargo test --workspace` continua em 110/110 (nenhum
+  arquivo Rust mudou neste passo). Sem passo de backend novo — reusa `path-filter` (45a) e
+  `paths` (45b), já verificados ponta a ponta com o job terminando `done` e a árvore deste
+  repositório respondendo os caminhos certos.
+- Aceite do Passo 45b (2026-08-22): `cargo test -p porc-git` — 69 testes, incluindo os 4 novos
+  de `list_paths` contra este próprio repositório (raiz marca pasta com `/` e arquivo sem;
+  `crates/porc-` acha as 4 crates do workspace, `crates/porc-g` afunila para uma só; `limit`
+  respeitado; pasta inexistente e "dentro" de um arquivo não falham, só vêm vazios).
+  `cargo test --workspace` — 110 testes, tudo verde. Clippy e `cargo fmt --check` limpos.
+  Handshake HTTP completo contra este repositório: raiz trouxe as pastas/arquivos certos com a
+  marcação certa; `prefix=crates/porc-` trouxe as 4 crates; prefixo inexistente veio vazio.
+- Aceite do Passo 45a (2026-08-22): `cargo test -p porc-git` — 65 testes, incluindo os 4 novos
+  de `path_filter` (`PROGRESSO.md` neste repositório traz exatamente os 3 commits que o
+  tocaram, na ordem certa; caminho que nunca existiu não falha, só vem vazio; cancelamento
+  pré-armado devolve `ExecError::Cancelled`; campos do commit raiz batem) e os 4 novos de
+  `parse::records` (vários commits num chunk só; campo partido no meio esperando o resto; data
+  ilegível vira zero em vez de derrubar; NUL faltando no fim não solta commit incompleto).
+  `cargo test --workspace` — 106 testes, tudo verde. Clippy e `cargo fmt --check` limpos.
+  Handshake HTTP completo contra este próprio repositório: `POST /jobs/path-filter` com
+  `path: "PROGRESSO.md"` terminou `done` com os 3 commits certos (mesmos oids, mesma ordem de
+  `git log --oneline -- PROGRESSO.md`); caminho inexistente terminou `done` com lista vazia;
+  `DELETE /jobs/{id}` respondeu 202 (o job já tinha terminado antes de a race chegar, repo
+  pequeno demais para observar o estado `cancelled` ao vivo — a cobertura de cancelamento de
+  verdade é o teste do `porc-git`).
+- Aceite do Passo 44a (2026-08-22): `cargo test -p porc-index` — 17 testes, incluindo hash
+  curto/completo/maiúsculo/ambíguo saltando pelo prefixo de oid; `autor:` combinado com texto
+  livre e sozinho (caminho sem FTS5); `depois:`/`antes:` filtrando por intervalo; token com
+  prefixo reconhecido mas inválido sendo ignorado sem erro; e `days_from_civil` batendo com
+  datas conhecidas (`1970-01-01`→0, `2000-03-01`→951868800, ano bissexto). `cargo test
+  --workspace` — 98 testes, tudo verde. Clippy e `cargo fmt --check` limpos. Handshake HTTP
+  completo contra este próprio repositório: `q=9db77b8` achou exatamente o commit "passo 35";
+  `autor:joaquimoiio` trouxe os 3 commits do autor; `depois:2026-08-20 antes:2026-08-22`
+  trouxe os mesmos 3 (todos feitos nesse intervalo); `depois:2030-01-01` (futuro) veio vazio.
+- Aceite do Passo 43b (2026-08-22): `npm run build` e `npm run lint` limpos. `cargo build
+  --release` embutiu o bundle novo (contém "buscar por mensagem ou autor"/"nenhum commit
+  encontrado", confirmado por grep no JS servido). Sem passo de backend novo — reusa o
+  `/search` do 43a, já verificado ponta a ponta contra este próprio repositório.
+- Aceite do Passo 43a (2026-08-22): `cargo test -p porc-index` — 13 testes, incluindo busca
+  por mensagem, por autor, por prefixo incremental, entrada perigosa (`AND`/`-erro`/aspa) sem
+  quebrar, busca vazia sem tocar o banco, e 50k linhas sintéticas em menos de 100ms.
+  `cargo test --workspace` — 94 testes, tudo verde. Clippy e `cargo fmt --check` limpos.
+  Handshake HTTP completo contra este próprio repositório: `search?q=passo` achou o commit
+  "progresso: passo 35…" de verdade; `q=` vazia devolveu `[]`; `q=" OR 1=1` (sintaxe FTS5
+  perigosa) devolveu 200 sem derrubar a rota.
+- Aceite do Passo 42 (2026-08-22): `cargo test -p porc-git` (57, incluindo
+  `walk_for_index_visita_todo_commit_alcancavel_do_head` — contagem conferida contra um
+  revwalk do próprio git2, não hardcoded — e `walk_for_index_para_cedo_quando_on_commit_devolve_false`)
+  e `cargo test -p porc-index` (8, incluindo os três novos de `commits::replace_commits`).
+  `cargo test --workspace` — 89 testes, tudo verde. Clippy e `cargo fmt --check` limpos.
+  Ponta a ponta: repositório sintético de **4000 commits** (`git fast-import`) aberto via
+  handshake HTTP completo — `GET /log` respondeu em ~54ms (o log não esperou a indexação);
+  `GET /jobs` mostrou o job `kind:"index"` progredindo e terminando `done` com
+  `result:{commits:4000}`; a tabela `commits` do `porcelain.db` ficou com exatamente 4000
+  linhas e `indexed_tip` batendo com o `git rev-parse HEAD` do repositório; reabrir o mesmo
+  repositório **não** criou um segundo job (índice já em dia). Repositório e linhas de teste
+  apagados ao final.
+- Aceite do Passo 41b (2026-08-22): `npm run build` e `npm run lint` limpos (o
+  `set-state-in-effect` do oxlint pegou o efeito de fechar arquivo ao trocar de commit — corrigido
+  para ajuste durante o render, ver decisão acima). `cargo build --release` embutiu o bundle novo
+  (contém "lado a lado"/"arquivo binário", confirmado por grep no JS servido). Sem passo de
+  backend novo — reusa o `/diff` do 41a, já verificado ponta a ponta com números reais.
+- Aceite do Passo 41a (2026-08-22): `cargo test -p porc-git` — 55 testes, incluindo os três
+  novos de `commit_diff` contra este próprio repositório (`web/src/app/Shell.tsx` no commit
+  `9db77b8`: 4 hunks, 146 inserções e 79 remoções batendo com `git diff-tree --numstat`, todo
+  `oldLineno`/`newLineno` coerente com o `kind` da linha; a fonte `.woff2` do Passo 15 →
+  `Binary`; caminho que o commit raiz não tocou → `FileNotInCommit`). `cargo test --workspace`
+  — 84 testes, tudo verde. Clippy e `cargo fmt --check` limpos. Handshake HTTP completo contra
+  este repositório confirmou os três casos ponta a ponta, com os mesmos números.
+- Aceite do Passo 40a (2026-08-22): `cargo test -p porc-git` — 52 testes, incluindo os três
+  novos de `commit_detail` (oid inválido → 400; commit raiz deste repositório com 15 arquivos
+  `Added`/1385 inserções batendo com `git show --stat`; commit normal com 50 arquivos/5763
+  inserções/9 remoções, soma por arquivo == agregado). `cargo test --workspace` — 81 testes,
+  tudo verde. Clippy e `cargo fmt --check` limpos. Handshake HTTP completo contra este próprio
+  repositório confirmou o JSON do commit raiz ponta a ponta, e um oid inválido devolveu 400.
+- Aceite do Passo 39b (2026-08-22): `npm run build` e `npm run lint` limpos. `cargo build
+  --release` embutiu o bundle novo (contém `isHead`/`border-dashed`, confirmado por grep no JS
+  servido). Sem passo de backend novo — reusa o `/refs` do 39a, já verificado ponta a ponta.
+- Aceite do Passo 39a (2026-08-22): `cargo test -p porc-git` — 49 testes, incluindo
+  `refs_do_projeto_marca_a_branch_atual` (contra este repositório de verdade: `main` com
+  `isHead: true`, `origin/main` presente) e `tag_e_head_destacado_ganham_marcador` (repositório
+  sintético com tag leve e `HEAD` destacado). `cargo test --workspace` — 78 testes, tudo verde.
+  `cargo clippy --workspace --all-targets --all-features` e `cargo fmt --check` limpos. Handshake
+  HTTP completo contra este próprio repositório confirmou o JSON: `main`/`isHead:true`,
+  `origin/main`/`isHead:false`.
+- Aceite do Passo 38 (2026-08-22): `npm run build` e `npm run lint` limpos. `cargo build
+  --release` embutiu o bundle novo (contém `getVirtualItems`/`devicePixelRatio`, confirmado por
+  grep no JS servido). Repositório sintético com fork+merge criado com o `git` do sistema
+  (`root`, `a`, `b` na main; `f1` na `feature`; `merge --no-ff`; `c`), aberto via o handshake
+  completo: o JSON de `/log` trouxe `merge` com `parentLanes: [0, 1]`, `f1` na lane 1, e `a`
+  (onde `b` e `f1` convergem) de volta na lane 0 — o mesmo shape que os testes do Passo 37 já
+  garantiam, agora confirmado ponta a ponta pela rota HTTP de verdade. Repositório de teste
+  apagado ao final.
+- Aceite do Passo 37 (2026-08-22): `cargo test -p porc-git` — 47 testes, incluindo os dois novos
+  do algoritmo de lanes (`lanes_convergem_no_fork_e_nascem_no_merge` e
+  `duas_paginas_encaixam_sem_descontinuidade_nas_lanes`). `cargo test --workspace` — 75 testes,
+  tudo verde. `cargo clippy --workspace --all-targets --all-features` e `cargo fmt --check`
+  limpos. `cargo build` (dev) compila.
+- Aceite do Passo 36 (2026-08-22): `npm run build` e `npm run lint` limpos (`oxlint` só aponta um
+  aviso informativo do `react-compiler` sobre `useVirtualizer` retornar funções não memoizáveis —
+  esperado da lib, sem regra configurada para isso). `cargo build --release` embutiu o bundle
+  novo; repositório sintético de **3000 commits** criado via `git fast-import` em `~/` (dentro do
+  confinamento — `/tmp` cai fora da raiz padrão, que é a home). Handshake → abrir → paginar bateu
+  6 páginas de 500 até `nextCursor: null`, e o JS servido pelo `rust-embed` contém o código do
+  `CommitList`. Repositório de teste apagado ao final.

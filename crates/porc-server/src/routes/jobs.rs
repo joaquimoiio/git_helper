@@ -15,7 +15,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use porc_git::exec::clone::{CloneError, CloneOptions, Prepared, StderrTail};
+use porc_git::exec::{
+    clone::{CloneError, CloneOptions, Prepared, StderrTail},
+    ExecError,
+};
+use porc_index::commits::SearchHit;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -284,6 +288,190 @@ async fn run_clone(handle: JobHandle, prepared: Prepared, state: AppState) {
             tracing::error!(%err, "spawn_blocking falhou ao abrir o repositório clonado");
             handle.fail("o clone terminou, mas não consegui abrir o repositório");
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathFilterRequest {
+    pub repo_id: String,
+    /// Pathspec, o mesmo que `git log -- <path>` aceita — não precisa ser um arquivo exato.
+    pub path: String,
+}
+
+/// A cada quantos commits achados o progresso é republicado. Não vale um evento por commit —
+/// o indicador só precisa mostrar que está andando, e um caminho comum pode ter milhares de
+/// acertos.
+const PATH_FILTER_PROGRESS_EVERY: usize = 50;
+
+/// Erro comum a todo job que começa a partir de um `repo_id`: `path-filter` e `pickaxe` são os
+/// dois de hoje, e os dois só podem falhar em "repositório desconhecido" ou "sem vaga de job".
+#[derive(Debug, thiserror::Error)]
+pub enum RepoJobStartError {
+    #[error(transparent)]
+    Repo(#[from] RepoError),
+    #[error(transparent)]
+    Jobs(#[from] JobsError),
+}
+
+impl IntoResponse for RepoJobStartError {
+    fn into_response(self) -> Response {
+        match self {
+            RepoJobStartError::Repo(err) => err.into_response(),
+            RepoJobStartError::Jobs(err) => err.into_response(),
+        }
+    }
+}
+
+/// `POST /api/v1/jobs/path-filter` — começa a varredura e volta na hora com o `jobId`.
+///
+/// Não pagina: os resultados vão inteiros no `result` do `job.done`, não em pedaços — o
+/// streaming aqui é entre o `git` e o servidor (stdout lido aos poucos, sem esperar o
+/// histórico inteiro passar pela memória do processo do git), não entre o servidor e o
+/// cliente. Ver a decisão no `PROGRESSO.md`: a entrega incremental de verdade é do pickaxe
+/// (Passo 46), cujo aceite de fato exige "primeiros resultados quase de imediato" — este
+/// passo só precisa do filtro correto e cancelável.
+pub async fn create_path_filter(
+    State(state): State<AppState>,
+    Json(body): Json<PathFilterRequest>,
+) -> Result<Response, RepoJobStartError> {
+    let repo_path = state
+        .repos
+        .path_of(&body.repo_id)
+        .ok_or(RepoError::Unknown)?;
+
+    let handle = state.jobs.create("path-filter")?;
+    let job_id = handle.job_id.clone();
+
+    tokio::spawn(run_path_filter(handle, repo_path, body.path));
+
+    Ok((StatusCode::ACCEPTED, Json(Accepted { job_id })).into_response())
+}
+
+async fn run_path_filter(handle: JobHandle, repo_path: std::path::PathBuf, path: String) {
+    handle.log(format!("filtrando por {path}"));
+
+    let mut hits: Vec<SearchHit> = Vec::new();
+
+    let outcome =
+        porc_git::exec::path_filter::by_path(&repo_path, &path, handle.cancel.clone(), |commit| {
+            hits.push(SearchHit {
+                oid: commit.oid,
+                author: commit.author,
+                email: commit.email,
+                time: commit.time,
+                summary: commit.summary,
+            });
+
+            if hits.len().is_multiple_of(PATH_FILTER_PROGRESS_EVERY) {
+                handle.progress(Progress {
+                    phase: "filtrando".to_owned(),
+                    fraction: None,
+                    detail: Some(format!("{} commits encontrados", hits.len())),
+                });
+            }
+        })
+        .await;
+
+    match outcome {
+        Ok(()) => {
+            handle.log(format!("{} commits encontrados", hits.len()));
+            handle.done(serde_json::json!({ "commits": hits }));
+        }
+        Err(ExecError::Cancelled) => handle.cancelled(),
+        Err(err) => handle.fail(err.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PickaxeMode {
+    /// `-S`: onde a contagem da string mudou.
+    String,
+    /// `-G`: onde uma linha do diff casa a expressão regular.
+    Regex,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickaxeRequest {
+    pub repo_id: String,
+    pub mode: PickaxeMode,
+    pub value: String,
+}
+
+/// `POST /api/v1/jobs/pickaxe` — começa a busca por conteúdo e volta na hora com o `jobId`.
+///
+/// Diferente do `path-filter` (Passo 45), aqui cada acerto vira um evento `job.hit` **assim
+/// que sai do `git`** — é o aceite deste passo: "ver os primeiros resultados aparecerem quase
+/// de imediato". O cliente cancela e recria este job a cada tecla (regra da caixa de busca,
+/// não deste handler): o `job_id` antigo simplesmente para de receber eventos que importem.
+pub async fn create_pickaxe(
+    State(state): State<AppState>,
+    Json(body): Json<PickaxeRequest>,
+) -> Result<Response, RepoJobStartError> {
+    let repo_path = state
+        .repos
+        .path_of(&body.repo_id)
+        .ok_or(RepoError::Unknown)?;
+
+    let handle = state.jobs.create("pickaxe")?;
+    let job_id = handle.job_id.clone();
+
+    let mode = match body.mode {
+        PickaxeMode::String => porc_git::exec::path_filter::ContentMode::StringCount(body.value),
+        PickaxeMode::Regex => porc_git::exec::path_filter::ContentMode::Regex(body.value),
+    };
+
+    tokio::spawn(run_pickaxe(handle, repo_path, mode));
+
+    Ok((StatusCode::ACCEPTED, Json(Accepted { job_id })).into_response())
+}
+
+async fn run_pickaxe(
+    handle: JobHandle,
+    repo_path: std::path::PathBuf,
+    mode: porc_git::exec::path_filter::ContentMode,
+) {
+    handle.log("buscando…");
+    handle.progress(Progress {
+        phase: "buscando".to_owned(),
+        fraction: None,
+        detail: None,
+    });
+
+    let mut total = 0usize;
+    let mut hits: Vec<SearchHit> = Vec::new();
+
+    let outcome = porc_git::exec::path_filter::by_content(
+        &repo_path,
+        &mode,
+        handle.cancel.clone(),
+        |commit| {
+            let hit = SearchHit {
+                oid: commit.oid,
+                author: commit.author,
+                email: commit.email,
+                time: commit.time,
+                summary: commit.summary,
+            };
+
+            // A diferença do `path-filter`: cada acerto vira evento na hora, não só um item
+            // acumulado para o `result` do fim.
+            handle.hit(serde_json::to_value(&hit).unwrap_or(serde_json::Value::Null));
+            total += 1;
+            hits.push(hit);
+        },
+    )
+    .await;
+
+    match outcome {
+        Ok(()) => {
+            handle.log(format!("{total} commits encontrados"));
+            handle.done(serde_json::json!({ "commits": hits }));
+        }
+        Err(ExecError::Cancelled) => handle.cancelled(),
+        Err(err) => handle.fail(err.to_string()),
     }
 }
 

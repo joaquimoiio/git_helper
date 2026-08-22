@@ -13,6 +13,7 @@ pub mod dev_proxy;
     not(all(feature = "dev-proxy", debug_assertions))
 ))]
 pub mod embed;
+pub mod index_job;
 pub mod jobs;
 pub mod middleware;
 pub mod repos;
@@ -247,6 +248,23 @@ pub fn router(state: AppState) -> Router {
         // Chaves e não `:id`: é a sintaxe de parâmetro do axum 0.8.
         .route("/api/v1/repos/{repo_id}", get(routes::repos::get))
         .route("/api/v1/repos/{repo_id}/log", get(routes::repos::log))
+        .route("/api/v1/repos/{repo_id}/refs", get(routes::repos::refs))
+        .route("/api/v1/repos/{repo_id}/status", get(routes::repos::status))
+        .route("/api/v1/repos/{repo_id}/stage", post(routes::repos::stage))
+        .route(
+            "/api/v1/repos/{repo_id}/unstage",
+            post(routes::repos::unstage),
+        )
+        .route("/api/v1/repos/{repo_id}/paths", get(routes::repos::paths))
+        .route("/api/v1/repos/{repo_id}/search", get(routes::repos::search))
+        .route(
+            "/api/v1/repos/{repo_id}/commits/{oid}",
+            get(routes::repos::commit),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/commits/{oid}/diff",
+            get(routes::repos::commit_diff),
+        )
         .route("/api/v1/recents", get(routes::recents::list))
         .route(
             "/api/v1/recents/{repo_id}",
@@ -256,6 +274,11 @@ pub fn router(state: AppState) -> Router {
         // O tipo é segmento estático, não parâmetro: cada tipo tem corpo próprio.
         .route("/api/v1/jobs/test", post(routes::jobs::create_test))
         .route("/api/v1/jobs/clone", post(routes::jobs::create_clone))
+        .route(
+            "/api/v1/jobs/path-filter",
+            post(routes::jobs::create_path_filter),
+        )
+        .route("/api/v1/jobs/pickaxe", post(routes::jobs::create_pickaxe))
         .route(
             "/api/v1/jobs/{job_id}",
             get(routes::jobs::get).delete(routes::jobs::cancel),

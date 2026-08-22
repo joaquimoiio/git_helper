@@ -12,9 +12,11 @@ use axum::{
 };
 use porc_git::{
     exec::init::{InitError, InitOptions},
-    model::{LogPage, RepoInfo},
+    exec::ExecError,
+    model::{CommitDetail, FileDiff, Head, LogPage, RefMarker, RepoInfo, WorktreeStatus},
     read::{Git2Repo, GitError, LogQuery, RepoRead},
 };
+use porc_index::commits::SearchHit;
 use serde::{Deserialize, Serialize};
 
 use crate::{routes::fs::FsError, AppState};
@@ -55,8 +57,15 @@ pub enum RepoError {
     Git(#[from] GitError),
     #[error(transparent)]
     Init(#[from] InitError),
+    #[error(transparent)]
+    Index(#[from] porc_index::IndexError),
+    /// `git status` shell-out falhou — diferente de `Git`, que é sempre `git2`.
+    #[error(transparent)]
+    Status(#[from] ExecError),
     #[error("a leitura do repositório não terminou")]
     Join,
+    #[error("nenhum caminho selecionado")]
+    NoPaths,
 }
 
 impl IntoResponse for RepoError {
@@ -71,14 +80,23 @@ impl IntoResponse for RepoError {
             RepoError::NotARepository(_) => StatusCode::BAD_REQUEST,
             RepoError::Unknown => StatusCode::NOT_FOUND,
             // Cursor que não decodifica, ou que aponta para objeto de outro repositório, é
-            // pedido malformado — não falha da leitura.
-            RepoError::Git(GitError::InvalidCursor) => StatusCode::BAD_REQUEST,
+            // pedido malformado — não falha da leitura. Mesmo raciocínio para um oid de commit
+            // que não decodifica ou não existe neste repositório.
+            RepoError::Git(GitError::InvalidCursor | GitError::InvalidCommit) => {
+                StatusCode::BAD_REQUEST
+            }
+            // Diferente do oid: o `path` do diff é bem formado, só não é um dos arquivos que
+            // este commit tocou — o recurso pedido é que não existe.
+            RepoError::Git(GitError::FileNotInCommit) => StatusCode::NOT_FOUND,
             // `AlreadyARepository` é 409: o pedido está bem formado, o mundo é que já está do
             // jeito que ele queria criar.
             RepoError::Init(InitError::AlreadyARepository(_)) => StatusCode::CONFLICT,
             RepoError::Init(InitError::Exec(_)) => StatusCode::INTERNAL_SERVER_ERROR,
             RepoError::Init(_) => StatusCode::BAD_REQUEST,
-            RepoError::Git(_) | RepoError::Join => StatusCode::INTERNAL_SERVER_ERROR,
+            RepoError::NoPaths => StatusCode::BAD_REQUEST,
+            RepoError::Git(_) | RepoError::Join | RepoError::Index(_) | RepoError::Status(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             RepoError::Fs(_) => unreachable!("tratado acima"),
         };
 
@@ -92,6 +110,15 @@ impl IntoResponse for RepoError {
     }
 }
 
+/// O oid que o `HEAD` aponta agora, se houver algum — é contra isto que o job de indexação
+/// decide se há trabalho novo. `unborn` não tem commit nenhum, então não tem o que indexar.
+fn head_oid(head: &Head) -> Option<String> {
+    match head {
+        Head::Branch { commit, .. } | Head::Detached { commit } => Some(commit.clone()),
+        Head::Unborn { .. } => None,
+    }
+}
+
 /// Abre o repositório e devolve quem ele é. Idempotente: abrir duas vezes devolve o mesmo id.
 pub async fn open(
     State(state): State<AppState>,
@@ -102,9 +129,10 @@ pub async fn open(
     let index = state.index.clone();
 
     // Todo o corpo é bloqueante: `canonicalize`, os `stat` do `is_repo`, o libgit2 e o SQLite.
-    let repo = tokio::task::spawn_blocking(move || {
+    let (repo, path) = tokio::task::spawn_blocking(move || {
         let path = crate::routes::fs::resolve(&settings.root, Some(&body.path))?;
-        register_opened(&registry, &index, &path)
+        let repo = register_opened(&registry, &index, &path)?;
+        Ok::<_, RepoError>((repo, path))
     })
     .await
     .map_err(|err| {
@@ -113,6 +141,15 @@ pub async fn open(
     })??;
 
     tracing::info!(repo = %repo.info.path, branch = %repo.info.branch, "repositório aberto");
+
+    // Fogo e esquece: quem abriu não espera a indexação, e o job decide sozinho se há
+    // trabalho novo (repositório já em dia é o caminho comum de reabrir).
+    crate::index_job::maybe_spawn(
+        &state,
+        repo.repo_id.clone(),
+        path,
+        head_oid(&repo.info.head),
+    );
 
     Ok(Json(repo))
 }
@@ -186,12 +223,13 @@ pub async fn init(
     let registry = state.repos.clone();
     let index = state.index.clone();
 
-    let repo = tokio::task::spawn_blocking(move || {
+    let (repo, path) = tokio::task::spawn_blocking(move || {
         // Reconferido depois de criado: o caminho passou por `create_dir` e `canonicalize`, e
         // confinamento que se checa só na entrada é confinamento que se perde numa refatoração.
         let path = crate::routes::fs::resolve(&settings.root, Some(&created.to_string_lossy()))?;
 
-        register_opened(&registry, &index, &path)
+        let repo = register_opened(&registry, &index, &path)?;
+        Ok::<_, RepoError>((repo, path))
     })
     .await
     .map_err(|err| {
@@ -200,6 +238,15 @@ pub async fn init(
     })??;
 
     tracing::info!(repo = %repo.info.path, branch = %repo.info.branch, "repositório criado");
+
+    // Quase sempre `unborn` (repositório recém-criado sem commit), então o job nem chega a
+    // nascer — mas o caminho é o mesmo do `open`, para o dia em que isso deixar de ser verdade.
+    crate::index_job::maybe_spawn(
+        &state,
+        repo.repo_id.clone(),
+        path,
+        head_oid(&repo.info.head),
+    );
 
     Ok(Json(repo))
 }
@@ -256,6 +303,219 @@ pub async fn log(
         })??;
 
     Ok(Json(page))
+}
+
+/// `GET /api/v1/repos/{repo_id}/refs` — toda ponta do repositório, para marcar linhas do log.
+///
+/// Não pagina: o número de branches, remotas e tags não cresce com o histórico, então não há
+/// fronteira nenhuma para cortar em página — diferente do `log`.
+pub async fn refs(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<Vec<RefMarker>>, RepoError> {
+    let path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+
+    let markers = tokio::task::spawn_blocking(move || Git2Repo::open(&path)?.refs())
+        .await
+        .map_err(|err| {
+            tracing::error!(%err, "spawn_blocking falhou ao ler as refs");
+            RepoError::Join
+        })??;
+
+    Ok(Json(markers))
+}
+
+/// Lê o status completo: o `git status` shell-out (`porc_git::exec::status`, rápido porque
+/// roda direto, não via `spawn_blocking`) mais o `git2::Repository::state()`
+/// (`RepoRead::state`, bloqueante) — o `CLAUDE.md` já separa os dois mundos, e misturá-los
+/// numa função só só complicaria sem precisar. Compartilhada por `status`, `stage` e
+/// `unstage`: as duas mutações devolvem o status já atualizado, para a UI não precisar de um
+/// segundo round-trip depois do otimista (Passo 48).
+async fn read_status(path: std::path::PathBuf) -> Result<WorktreeStatus, RepoError> {
+    let output = porc_git::exec::status::run(&path).await?;
+    let mut report = porc_git::parse::status_v2::parse(&output.stdout);
+
+    report.state = tokio::task::spawn_blocking(move || Git2Repo::open(&path)?.state())
+        .await
+        .map_err(|err| {
+            tracing::error!(%err, "spawn_blocking falhou ao ler o estado do repositório");
+            RepoError::Join
+        })??;
+
+    Ok(report)
+}
+
+/// `GET /api/v1/repos/{repo_id}/status` — status do working tree, agrupado em staged /
+/// unstaged / untracked, mais o estado de merge/rebase em andamento (Passo 47).
+pub async fn status(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<WorktreeStatus>, RepoError> {
+    let path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+
+    Ok(Json(read_status(path).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagePathsRequest {
+    /// Sempre explícita: nunca "tudo" implícito por lista vazia. Selecionar tudo é resolvido
+    /// no cliente, que já tem os caminhos do último `status`.
+    pub paths: Vec<String>,
+}
+
+/// `POST /api/v1/repos/{repo_id}/stage` — `git add -- <paths>` (Passo 48). Cobre modificado,
+/// novo e deletado no mesmo comando; devolve o status já atualizado.
+pub async fn stage(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Json(body): Json<StagePathsRequest>,
+) -> Result<Json<WorktreeStatus>, RepoError> {
+    if body.paths.is_empty() {
+        return Err(RepoError::NoPaths);
+    }
+
+    let path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+    porc_git::exec::stage::add(&path, &body.paths).await?;
+
+    Ok(Json(read_status(path).await?))
+}
+
+/// `POST /api/v1/repos/{repo_id}/unstage` — `git reset -- <paths>` (Passo 48). Funciona mesmo
+/// em `HEAD` unborn; devolve o status já atualizado.
+pub async fn unstage(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Json(body): Json<StagePathsRequest>,
+) -> Result<Json<WorktreeStatus>, RepoError> {
+    if body.paths.is_empty() {
+        return Err(RepoError::NoPaths);
+    }
+
+    let path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+    porc_git::exec::stage::reset(&path, &body.paths).await?;
+
+    Ok(Json(read_status(path).await?))
+}
+
+/// Teto do autocomplete de caminho. Uma pasta normal não tem mais que isto de entradas
+/// diretas; se tiver, o resto só apareceria conforme a pessoa continuasse digitando.
+const PATH_AUTOCOMPLETE_LIMIT: usize = 100;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathsParams {
+    /// Ausente é a raiz da árvore. Mesmo formato que a UI manda de volta: `pasta/parcial`.
+    #[serde(default)]
+    pub prefix: String,
+}
+
+/// `GET /api/v1/repos/{repo_id}/paths?prefix=…` — autocomplete do filtro por caminho
+/// (Passo 45). Lê a árvore de `HEAD` via git2, não o histórico — é o motivo de não precisar
+/// de índice nem de streaming, diferente do `path-filter` (`POST /api/v1/jobs/path-filter`).
+pub async fn paths(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Query(params): Query<PathsParams>,
+) -> Result<Json<Vec<String>>, RepoError> {
+    let path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+
+    let entries = tokio::task::spawn_blocking(move || {
+        Git2Repo::open(&path)?.list_paths(&params.prefix, PATH_AUTOCOMPLETE_LIMIT)
+    })
+    .await
+    .map_err(|err| {
+        tracing::error!(%err, "spawn_blocking falhou ao listar caminhos");
+        RepoError::Join
+    })??;
+
+    Ok(Json(entries))
+}
+
+/// Teto do que uma busca devolve de uma vez. Não é sobre performance (o FTS5 é rápido mesmo em
+/// 100k linhas) — é sobre a lista de resultados continuar sendo "os que interessam", não um
+/// segundo log inteiro por baixo de outro nome.
+const SEARCH_LIMIT: usize = 500;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchParams {
+    /// Vazia é "sem filtro" — a rota devolve lista vazia sem consultar o SQLite.
+    pub q: String,
+}
+
+/// `GET /api/v1/repos/{repo_id}/search?q=…` — busca por mensagem ou autor no índice FTS5
+/// (Passo 42). Não usa `git2`: é consulta pura ao `porc-index`, então nem abre o repositório.
+pub async fn search(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Query(params): Query<SearchParams>,
+) -> Result<Json<Vec<SearchHit>>, RepoError> {
+    // Mesma checagem de "repositório aberto neste boot" que toda rota de `repo_id` faz, mesmo
+    // não indo ao git2: um id desconhecido não devia buscar em índice nenhum.
+    if state.repos.path_of(&repo_id).is_none() {
+        return Err(RepoError::Unknown);
+    }
+
+    let index = state.index.clone();
+    let hits = tokio::task::spawn_blocking(move || {
+        index.search_commits(&repo_id, &params.q, SEARCH_LIMIT)
+    })
+    .await
+    .map_err(|err| {
+        tracing::error!(%err, "spawn_blocking falhou ao buscar");
+        RepoError::Join
+    })??;
+
+    Ok(Json(hits))
+}
+
+/// `GET /api/v1/repos/{repo_id}/commits/{oid}` — mensagem completa, assinaturas e diffstat de
+/// um commit. É o que preenche o painel de detalhe ao selecionar uma linha do log.
+pub async fn commit(
+    State(state): State<AppState>,
+    Path((repo_id, oid)): Path<(String, String)>,
+) -> Result<Json<CommitDetail>, RepoError> {
+    let path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+
+    let detail = tokio::task::spawn_blocking(move || Git2Repo::open(&path)?.commit_detail(&oid))
+        .await
+        .map_err(|err| {
+            tracing::error!(%err, "spawn_blocking falhou ao ler o commit");
+            RepoError::Join
+        })??;
+
+    Ok(Json(detail))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffParams {
+    /// Caminho **atual** do arquivo (o lado novo de um rename) — o mesmo `path` que
+    /// `commit_detail` já devolveu em cada `FileChange`.
+    pub path: String,
+}
+
+/// `GET /api/v1/repos/{repo_id}/commits/{oid}/diff?path=…` — os hunks de **um** arquivo, sob
+/// demanda. Um commit pode tocar centenas de arquivos; mandar todo mundo de uma vez na rota de
+/// detalhe seria o oposto do que uma tela de revisão precisa no primeiro clique.
+pub async fn commit_diff(
+    State(state): State<AppState>,
+    Path((repo_id, oid)): Path<(String, String)>,
+    Query(params): Query<DiffParams>,
+) -> Result<Json<FileDiff>, RepoError> {
+    let fs_path = state.repos.path_of(&repo_id).ok_or(RepoError::Unknown)?;
+
+    let diff = tokio::task::spawn_blocking(move || {
+        Git2Repo::open(&fs_path)?.commit_diff(&oid, &params.path)
+    })
+    .await
+    .map_err(|err| {
+        tracing::error!(%err, "spawn_blocking falhou ao ler o diff");
+        RepoError::Join
+    })??;
+
+    Ok(Json(diff))
 }
 
 /// Repositórios abertos **neste boot**. Não é a lista de recentes (Passo 26), que persiste.

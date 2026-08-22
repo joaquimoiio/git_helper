@@ -6,6 +6,7 @@
 //! `Index::open` nunca devolve erro fatal para o boot — se o arquivo não abrir, o índice cai
 //! para memória e o app sobe assim mesmo, sem recentes entre boots.
 
+pub mod commits;
 pub mod recents;
 
 use std::{
@@ -19,7 +20,7 @@ use rusqlite::Connection;
 ///
 /// Migração é sempre opcional: se um dia migrar der trabalho demais, apagar e recriar é uma
 /// saída legítima justamente porque nada aqui é fonte da verdade.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 3;
 
 const DB_FILE: &str = "porcelain.db";
 
@@ -108,6 +109,20 @@ impl Index {
         let conn = self.conn.lock().expect("índice envenenado");
         f(&conn)
     }
+
+    /// Como `with`, mas dentro de uma transação: ou tudo aplica, ou nada aplica. É o que a
+    /// reindexação usa para substituir os commits de um repositório sem deixar o índice pela
+    /// metade se o processo morrer no meio (`commits::replace`).
+    fn with_transaction<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction) -> Result<T, rusqlite::Error>,
+    ) -> Result<T, rusqlite::Error> {
+        let mut conn = self.conn.lock().expect("índice envenenado");
+        let tx = conn.transaction()?;
+        let result = f(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
 }
 
 fn migrate(conn: &Connection) -> Result<(), IndexError> {
@@ -120,6 +135,8 @@ fn migrate(conn: &Connection) -> Result<(), IndexError> {
     }
 
     conn.execute_batch(recents::SCHEMA)
+        .map_err(IndexError::Open)?;
+    conn.execute_batch(commits::SCHEMA)
         .map_err(IndexError::Open)?;
 
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)

@@ -68,6 +68,9 @@ function apply(queryClient: QueryClient, message: ServerMessage) {
     case "job.log":
       return patch(message.jobId, (job) => ({ ...job, log: [...job.log, message.line] }));
 
+    case "job.hit":
+      return patch(message.jobId, (job) => ({ ...job, hits: [...job.hits, message.hit] }));
+
     case "job.askpass":
       return patch(message.jobId, (job) => ({
         ...job,

@@ -13,7 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 
 import { api } from "./api";
-import type { InitRequest, RecentEntry, Repo, Scan } from "./api-types";
+import type { InitRequest, RecentEntry, RefMarker, Repo, Scan } from "./api-types";
 
 interface RepoStore {
   repoId: string | null;
@@ -101,6 +101,20 @@ export function useDiscovered() {
     queryKey: ["scan"],
     queryFn: () => api.get<Scan>("/fs/scan"),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Toda ponta do repositório (branches, remotas, tags, `HEAD` destacado), para marcar linhas
+ * do log. `staleTime: Infinity` como o log: nada por baixo dos pés muda enquanto a aba está
+ * aberta, é o WebSocket (Bloco E) que vai invalidar isto quando o usuário criar ou mover uma
+ * branch por fora.
+ */
+export function useRefs(repoId: string) {
+  return useQuery({
+    queryKey: ["refs", repoId],
+    queryFn: () => api.get<RefMarker[]>(`/repos/${repoId}/refs`),
+    staleTime: Infinity,
   });
 }
 

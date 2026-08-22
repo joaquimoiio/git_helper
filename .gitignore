@@ -5,10 +5,23 @@
 # Frontend
 node_modules/
 web/dist/
+web/.vite/
 *.local
+npm-debug.log*
 
 # Sistema
 .DS_Store
+Thumbs.db
+
+# Editores/IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# Segredos (nunca versionar)
+.env
+.env.*
 
 # Dados locais do app (nunca versionar)
 *.db

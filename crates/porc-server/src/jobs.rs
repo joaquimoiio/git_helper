@@ -102,6 +102,10 @@ pub struct JobSnapshot {
     pub state: JobState,
     pub progress: Option<Progress>,
     pub log: Vec<String>,
+    /// Resultados que chegam **durante** o job, um a um — o pickaxe (Passo 46) é quem usa
+    /// isto: cada commit achado é um `hit`, publicado assim que sai do `git`, sem esperar o
+    /// job terminar. Formato por tipo de job, igual ao `result` final.
+    pub hits: Vec<serde_json::Value>,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     /// Mensagem legível quando `state` é `error`. Nunca stderr cru.
@@ -160,6 +164,13 @@ pub enum ServerMessage {
     JobProgress { job_id: String, progress: Progress },
     #[serde(rename = "job.log", rename_all = "camelCase")]
     JobLog { job_id: String, line: String },
+    /// Um resultado que chegou durante o job — o pickaxe filtrando o grafo conforme os oids
+    /// aparecem, sem esperar o `job.done`.
+    #[serde(rename = "job.hit", rename_all = "camelCase")]
+    JobHit {
+        job_id: String,
+        hit: serde_json::Value,
+    },
     /// `Box` porque o snapshot é três vezes maior que qualquer outra variante, e esta enum é
     /// **clonada para cada assinante** do canal de eventos. No JSON não muda nada.
     #[serde(rename = "job.done")]
@@ -186,6 +197,7 @@ impl ServerMessage {
             ServerMessage::Ready | ServerMessage::Pong | ServerMessage::Resync => "control",
             ServerMessage::JobProgress { .. }
             | ServerMessage::JobLog { .. }
+            | ServerMessage::JobHit { .. }
             | ServerMessage::JobDone { .. }
             | ServerMessage::JobError { .. }
             | ServerMessage::JobAskpass { .. }
@@ -311,6 +323,7 @@ impl Jobs {
                     state: JobState::Running,
                     progress: None,
                     log: Vec::new(),
+                    hits: Vec::new(),
                     started_at: now_ms(),
                     finished_at: None,
                     message: None,
@@ -479,6 +492,22 @@ impl JobHandle {
         });
     }
 
+    /// Um resultado achado **durante** o job — o pickaxe usa isto para cada commit, assim que
+    /// o `git` o entrega, em vez de esperar acumular tudo para o `result` final do `done`.
+    pub fn hit(&self, hit: serde_json::Value) {
+        self.jobs.with_record(&self.job_id, |record| {
+            if record.snapshot.hits.len() == LOG_TAIL {
+                record.snapshot.hits.remove(0);
+            }
+            record.snapshot.hits.push(hit.clone());
+        });
+
+        self.jobs.publish(ServerMessage::JobHit {
+            job_id: self.job_id.clone(),
+            hit,
+        });
+    }
+
     pub fn done(self, result: serde_json::Value) {
         self.finish(JobState::Done, None, Some(result));
     }
@@ -594,6 +623,46 @@ mod tests {
         assert_eq!(snapshot.state, JobState::Done);
         assert_eq!(snapshot.log, ["primeira linha"]);
         assert!(snapshot.finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn hit_publica_e_acumula_no_snapshot() {
+        let jobs = Arc::new(Jobs::default());
+        let mut events = jobs.subscribe();
+
+        let handle = jobs.create("pickaxe").unwrap();
+        let job_id = handle.job_id.clone();
+
+        handle.hit(serde_json::json!({ "oid": "aaa" }));
+        handle.hit(serde_json::json!({ "oid": "bbb" }));
+
+        for _ in 0..2 {
+            assert!(matches!(
+                events.recv().await.unwrap(),
+                ServerMessage::JobHit { .. }
+            ));
+        }
+
+        let snapshot = jobs.snapshot(&job_id).unwrap();
+        assert_eq!(snapshot.hits.len(), 2);
+        assert_eq!(snapshot.hits[0]["oid"], "aaa");
+        assert_eq!(snapshot.hits[1]["oid"], "bbb");
+    }
+
+    #[tokio::test]
+    async fn hit_corta_a_cauda_como_o_log() {
+        let jobs = Arc::new(Jobs::default());
+        let handle = jobs.create("pickaxe").unwrap();
+        let job_id = handle.job_id.clone();
+
+        for i in 0..(LOG_TAIL + 5) {
+            handle.hit(serde_json::json!({ "n": i }));
+        }
+
+        let snapshot = jobs.snapshot(&job_id).unwrap();
+        assert_eq!(snapshot.hits.len(), LOG_TAIL);
+        // Os mais antigos saem primeiro — a cauda guarda os mais recentes.
+        assert_eq!(snapshot.hits[0]["n"], 5);
     }
 
     #[tokio::test]

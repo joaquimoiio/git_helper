@@ -5,3 +5,5 @@
 //! (`git status` sem `--porcelain`, `git log` no formato default) não entra aqui.
 
 pub mod progress;
+pub mod records;
+pub mod status_v2;
