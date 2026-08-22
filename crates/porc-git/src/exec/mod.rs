@@ -22,7 +22,11 @@
 //! Override de config é sempre efêmero, via `git -c chave=valor`. **Nunca** `git config
 //! --global` sem o usuário pedir explicitamente na UI.
 
+pub mod apply;
+pub mod branch;
 pub mod clone;
+pub mod commit;
+pub mod discard;
 pub mod error;
 pub mod init;
 pub mod path_filter;
@@ -102,6 +106,10 @@ pub enum ExecError {
 pub struct Failure {
     pub status: ExitStatus,
     pub stderr: String,
+    /// O que ele escreveu no stdout antes de desistir. Quase sempre vazio — mas o `git commit`
+    /// põe "nothing to commit" **ali**, não no stderr, e sem isto a única informação útil da
+    /// falha se perderia.
+    pub stdout: String,
 }
 
 #[derive(Debug)]
@@ -146,14 +154,59 @@ pub fn command(repo: Option<&Path>) -> Command {
 const GRACE: Duration = Duration::from_secs(2);
 
 /// Roda até o fim, com teto de tempo. Estourar o teto mata o **grupo**, não só o filho.
-pub async fn run(mut command: Command, timeout: Duration) -> Result<Output, ExecError> {
-    let child = command.spawn().map_err(|err| match err.kind() {
+pub async fn run(command: Command, timeout: Duration) -> Result<Output, ExecError> {
+    run_inner(command, timeout, None).await
+}
+
+/// O mesmo que [`run`], mas alimentando o `stdin` do git com um texto.
+///
+/// É como o patch parcial chega ao `git apply --cached` (Passo 50): por pipe, nunca por arquivo
+/// temporário — um patch em disco é uma janela em que outro processo pode lê-lo ou trocá-lo, e
+/// um arquivo a mais para limpar quando o comando morre no meio.
+///
+/// A escrita vai numa task à parte: com o `stdin` cheio e ninguém lendo o `stdout`, escrever e
+/// esperar na mesma task se trancaria uma na outra.
+pub async fn run_with_input(
+    mut command: Command,
+    timeout: Duration,
+    input: Vec<u8>,
+) -> Result<Output, ExecError> {
+    // O `command` desta casa fecha o stdin por padrão (regra da casa: nada espera digitação).
+    // Aqui a entrada é nossa, não do usuário, e é justamente por isso que dá para abri-la.
+    command.stdin(Stdio::piped());
+    run_inner(command, timeout, Some(input)).await
+}
+
+async fn run_inner(
+    mut command: Command,
+    timeout: Duration,
+    input: Option<Vec<u8>>,
+) -> Result<Output, ExecError> {
+    let mut child = command.spawn().map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => ExecError::NotFound,
         _ => ExecError::Spawn(err),
     })?;
 
     // Guardado antes do `wait_with_output`, que consome o `Child`.
     let pid = child.id();
+
+    if let Some(input) = input {
+        let mut stdin = child
+            .stdin
+            .take()
+            .expect("`run_with_input` acabou de pôr o stdin em pipe");
+
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+
+            // Falhar aqui é o git ter fechado o pipe antes de ler tudo — patch recusado, por
+            // exemplo. Quem conta essa história é o status de saída, que o `run_inner` já lê;
+            // um erro daqui só duplicaria a mesma notícia com palavras piores.
+            let _ = stdin.write_all(&input).await;
+            // O fecho é o EOF que faz o `git apply` parar de esperar mais patch.
+            let _ = stdin.shutdown().await;
+        });
+    }
 
     // `wait_with_output` coleta stdout e stderr *enquanto* espera. Com os dois em `piped`, só
     // esperar o status deixaria um pipe cheio travar o git para sempre — e aí o teto de tempo
@@ -188,6 +241,7 @@ pub async fn run(mut command: Command, timeout: Duration) -> Result<Output, Exec
         return Err(ExecError::Failed(Failure {
             status: output.status,
             stderr,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         }));
     }
 
@@ -287,8 +341,9 @@ where
 
         return Err(ExecError::Failed(Failure {
             status,
-            // O stderr já foi entregue pedaço a pedaço; quem quiser guardá-lo, guardou.
+            // Os dois já foram entregues pedaço a pedaço; quem quiser guardá-los, guardou.
             stderr: String::new(),
+            stdout: String::new(),
         }));
     }
 

@@ -10,6 +10,7 @@ import { useState } from "react";
 
 import type { FileChange, Signature } from "../../lib/api-types";
 import { formatSignatureDate, useCommitDetail, useCommitSelection } from "../../lib/commit";
+import { useCommit, useStatus } from "../../lib/status";
 import { FileDiffView } from "./FileDiffView";
 
 function SignatureRow({ label, signature }: { label: string; signature: Signature }) {
@@ -47,6 +48,39 @@ function FileRow({ file, onOpen }: { file: FileChange; onOpen: () => void }) {
         )}
       </button>
     </li>
+  );
+}
+
+/**
+ * "corrigir este commit": cria um `fixup!` com o que estiver preparado no índice (Passo 54).
+ *
+ * A mensagem é do git, não nossa — é ela que o `rebase --autosquash` reconhece depois. Por isso
+ * aqui não há caixa de texto: o gesto inteiro é um botão. O que ele exige é que haja algo
+ * preparado, e é o `status` quem diz isso.
+ */
+function FixupButton({ repoId, oid }: { repoId: string; oid: string }) {
+  const status = useStatus(repoId).data;
+  const commit = useCommit(repoId);
+  const preparado = (status?.staged.length ?? 0) > 0;
+
+  return (
+    <div className="px-3 py-2 border-b border-n-5">
+      <button
+        type="button"
+        onClick={() => commit.mutate({ message: "", fixup: oid })}
+        disabled={!preparado || commit.isPending}
+        className="text-xs px-2 py-0.5 rounded-sm border border-n-6 text-n-10 hover:text-n-11 disabled:text-n-7 transition-colors duration-(--duration-fast)"
+      >
+        corrigir este commit
+      </button>
+      <p className="mt-1 text-xs text-n-8">
+        {commit.isError
+          ? commit.error.message
+          : preparado
+            ? "cria um commit fixup! com o que está preparado"
+            : "prepare alguma coisa no status para poder corrigir"}
+      </p>
+    </div>
   );
 }
 
@@ -101,6 +135,8 @@ export function CommitDetail({ repoId }: { repoId: string }) {
         <p className="font-mono text-xs text-n-8 break-all">{commit.oid}</p>
         <p className="mt-1 whitespace-pre-wrap text-n-11">{commit.message}</p>
       </div>
+
+      <FixupButton repoId={repoId} oid={commit.oid} />
 
       <dl className="px-3 py-2 border-b border-n-5 flex flex-col gap-2">
         <SignatureRow label="autor" signature={commit.author} />

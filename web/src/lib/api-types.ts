@@ -293,6 +293,22 @@ export interface CommitDetail {
   files: FileChange[];
 }
 
+/**
+ * `GET /api/v1/repos/{repoId}/compare?from=&to=` — a diferença acumulada entre dois pontos
+ * quaisquer do histórico (Passo 56).
+ *
+ * Não é `CommitDetail` com outro nome: não há autor, committer nem mensagem, porque não há um
+ * commit sendo mostrado. `from` e `to` voltam **resolvidos** em oid, mesmo quando o pedido foi
+ * por nome de branch — é assim que fica claro o que foi comparado de verdade.
+ */
+export interface RangeDiff {
+  from: string;
+  to: string;
+  insertions: number;
+  deletions: number;
+  files: FileChange[];
+}
+
 export type DiffLineKind = "context" | "addition" | "deletion";
 
 /** Uma linha dentro de um hunk. Sem o `\n` final — apresentação decide como quebrar. */
@@ -353,4 +369,162 @@ export interface RefMarker {
   commit: string;
   /** `true` quando é a ponta para a qual o `HEAD` aponta agora. */
   isHead: boolean;
+}
+
+/**
+ * `GET /api/v1/repos/{repoId}/remotes` — os remotes configurados, o que o `git remote -v` lista.
+ *
+ * A sidebar precisa deles para **agrupar** as remotas: o nome curto de uma remota é
+ * `origin/main`, e quem sabe onde o nome do remote termina é o próprio git (ele aceita remote
+ * com barra no nome).
+ */
+export interface Remote {
+  name: string;
+  /** `null` num remote sem URL de fetch — raro, mas o git aceita a configuração. */
+  fetchUrl: string | null;
+  /** Só presente quando existe `remote.<nome>.pushurl` própria. */
+  pushUrl: string | null;
+}
+
+/** `GET /api/v1/repos/{repoId}/stashes` — a pilha de stash, do topo para o fundo. */
+export interface StashEntry {
+  /** Posição na pilha: 0 é o topo, o `stash@{0}` do terminal. */
+  index: number;
+  oid: string;
+  /** Como o git a escreveu (`WIP on main: 1234567 assunto`), sem reescrita nossa. */
+  message: string;
+}
+
+/* -------------------------------------------------------------------------- status */
+
+/**
+ * Qual dos dois diffs do trabalho local — o que o terminal escreve como `git diff` e
+ * `git diff --cached`. Parâmetro de `GET /repos/{repoId}/diff` e campo de `apply`.
+ */
+export type DiffSide = "unstaged" | "staged";
+
+/**
+ * O que aconteceu com um caminho no working tree.
+ *
+ * `unmerged` é conflito (linha `u` do porcelain v2). Não abre um quarto grupo: vem dentro de
+ * `unstaged`, visível, e o Bloco G decide o que fazer com ele.
+ */
+export type StatusKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "typechange"
+  | "unmerged"
+  | "untracked";
+
+/** Um caminho dentro de um dos três grupos do status. */
+export interface StatusEntry {
+  path: string;
+  /** Só presente em `renamed`/`copied`. */
+  oldPath: string | null;
+  kind: StatusKind;
+}
+
+/** O cabeçalho `# branch.*` do porcelain v2 — quem é o `HEAD` e como ele está frente ao upstream. */
+export interface BranchStatus {
+  /** `null` em repositório sem commit nenhum. */
+  oid: string | null;
+  /** `null` com `HEAD` destacado — o oid já diz tudo nesse caso. */
+  head: string | null;
+  detached: boolean;
+  /** Ausente quando a branch não tem upstream configurado. */
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+/** Operação em andamento que ainda não terminou. `clean` é o caso normal. */
+export type RepoState = "clean" | "merge" | "rebase" | "cherryPick" | "revert" | "bisect";
+
+/** `GET /api/v1/repos/{repoId}/status` — e também o que `stage`/`unstage` devolvem já atualizado. */
+export interface WorktreeStatus {
+  branch: BranchStatus;
+  state: RepoState;
+  staged: StatusEntry[];
+  unstaged: StatusEntry[];
+  untracked: StatusEntry[];
+}
+
+/**
+ * `POST /api/v1/repos/{repoId}/stage` e `/unstage`.
+ *
+ * A lista é sempre explícita: não existe "tudo" implícito por lista vazia (o servidor recusa
+ * com 400). Selecionar tudo é o cliente mandando os caminhos que o último `status` trouxe.
+ */
+export interface StagePathsRequest {
+  paths: string[];
+}
+
+/**
+ * `POST /api/v1/repos/{repoId}/apply` — move trechos de um lado para o outro.
+ *
+ * `side` diz **onde os trechos estão agora**, e com isso para onde eles vão: de `unstaged` é
+ * preparar, de `staged` é desfazer. Os índices são os do `GET /diff` do mesmo arquivo e do mesmo
+ * lado — é a mesma numeração porque é o mesmo diff.
+ */
+export interface ApplyHunksRequest {
+  path: string;
+  side: DiffSide;
+  hunks: HunkPick[];
+}
+
+/** `POST /api/v1/repos/{repoId}/commit`. Assunto e corpo já juntos — quem limpa é o git. */
+export interface CommitRequest {
+  message: string;
+  /** Reescreve o commit anterior em vez de criar um novo. */
+  amend?: boolean;
+  /** Acrescenta o trailer `Signed-off-by:` com a identidade configurada. */
+  signoff?: boolean;
+  /**
+   * Ausente respeita o `commit.gpgSign` do usuário — que é o certo por padrão. Presente força,
+   * só para este commit e por flag: o app nunca escreve na config dele.
+   */
+  gpgSign?: boolean;
+  /**
+   * Oid do commit que este corrige. Presente, **a mensagem é do git** (`fixup! <assunto>`) e o
+   * campo `message` é ignorado — é essa mensagem exata que o `rebase --autosquash` reconhece.
+   */
+  fixup?: string;
+}
+
+export interface CommitDone {
+  /** Oid completo do commit recém-criado. */
+  oid: string;
+  /** O status logo depois, que quase sempre é bem mais vazio do que antes. */
+  status: WorktreeStatus;
+}
+
+/** `GET /api/v1/repos/{repoId}/commit/template` — o `commit.template` do usuário, se houver. */
+export interface CommitTemplate {
+  /** `null` quando não há `commit.template` configurado — o caso comum. */
+  template: string | null;
+}
+
+/**
+ * `POST /api/v1/repos/{repoId}/discard/hunks` — desfaz trechos **no arquivo em disco**.
+ *
+ * Sempre do lado `unstaged`: descartar é jogar fora o que não está no índice. O que está no
+ * índice se desfaz com `unstage`, sem perder nada.
+ */
+export interface DiscardHunksRequest {
+  path: string;
+  hunks: HunkPick[];
+}
+
+/** Um trecho escolhido: o hunk inteiro, ou linhas dentro dele. */
+export interface HunkPick {
+  hunk: number;
+  /**
+   * Ausente é o hunk inteiro. Presente são as **linhas de mudança** escolhidas, numeradas só
+   * entre as de mudança do hunk — a primeira adição ou remoção é 0. Contexto não entra na
+   * conta, dos dois lados do fio: contexto não muda de lado.
+   */
+  lines?: number[];
 }

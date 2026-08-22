@@ -5,4 +5,5 @@ pub mod discover;
 pub mod exec;
 pub mod model;
 pub mod parse;
+pub mod patch;
 pub mod read;

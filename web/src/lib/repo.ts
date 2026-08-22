@@ -13,7 +13,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 
 import { api } from "./api";
-import type { InitRequest, RecentEntry, RefMarker, Repo, Scan } from "./api-types";
+import type {
+  InitRequest,
+  RecentEntry,
+  RefMarker,
+  Remote,
+  Repo,
+  Scan,
+  StashEntry,
+} from "./api-types";
 
 interface RepoStore {
   repoId: string | null;
@@ -114,6 +122,28 @@ export function useRefs(repoId: string) {
   return useQuery({
     queryKey: ["refs", repoId],
     queryFn: () => api.get<RefMarker[]>(`/repos/${repoId}/refs`),
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * Os remotes configurados. Consulta à parte das refs, e com outro ritmo: remote é
+ * **configuração**, só muda quando o usuário a muda (Passo 62), enquanto as refs mudam a cada
+ * fetch. Juntá-las numa consulta só faria uma rebuscar por causa da outra.
+ */
+export function useRemotes(repoId: string) {
+  return useQuery({
+    queryKey: ["remotes", repoId],
+    queryFn: () => api.get<Remote[]>(`/repos/${repoId}/remotes`),
+    staleTime: Infinity,
+  });
+}
+
+/** A pilha de stash, do topo para o fundo. `index: 0` é o `stash@{0}` do terminal. */
+export function useStashes(repoId: string) {
+  return useQuery({
+    queryKey: ["stashes", repoId],
+    queryFn: () => api.get<StashEntry[]>(`/repos/${repoId}/stashes`),
     staleTime: Infinity,
   });
 }

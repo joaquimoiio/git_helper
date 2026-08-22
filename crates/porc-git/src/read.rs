@@ -13,7 +13,8 @@ use git2::{ErrorCode, Oid, Repository, Sort};
 
 use crate::model::{
     self, Commit, CommitDetail, DiffHunk, DiffLine, DiffLineKind, FileChange, FileChangeKind,
-    FileDiff, Head, LogPage, RefKind, RefMarker, RepoInfo, RepoState, Signature,
+    FileDiff, Head, LogPage, RangeDiff, RefKind, RefMarker, Remote, RepoInfo, RepoState, Signature,
+    StashEntry,
 };
 
 /// Teto da pré-alocação da página. O `limit` vem clampado da rota, mas este crate é uma
@@ -32,6 +33,29 @@ pub enum GitError {
     InvalidCommit,
     #[error("este arquivo não foi tocado por este commit")]
     FileNotInCommit,
+    /// O caminho existe, mas não tem mudança **deste lado** — pedir o diff staged de um arquivo
+    /// que só está modificado no worktree, por exemplo. Não é o mesmo erro que o de commit: ali
+    /// o commit é imutável, aqui basta o usuário stagear para o mesmo pedido passar a valer.
+    #[error("este arquivo não tem mudança deste lado")]
+    FileUnchanged,
+    /// O patch não é UTF-8 — arquivo de encoding legado. A UI já mostra `FileDiff::NotUtf8` no
+    /// lugar do diff; aqui é a recusa de **recortá-lo**, que é pior: um patch remendado com
+    /// `lossy` não bateria mais com o conteúdo, e o `git apply` recusaria ou aplicaria outra
+    /// coisa.
+    #[error("este arquivo não é texto UTF-8 — não dá para recortar o patch dele")]
+    NotUtf8,
+}
+
+/// Qual dos dois diffs do trabalho local: o que está fora do commit, ou o que já está dentro.
+///
+/// São os dois lados que o `git status` separa, e os dois comandos que o terminal escreve como
+/// `git diff` e `git diff --cached`. Em libgit2: `Unstaged` é índice ↔ worktree, `Staged` é
+/// árvore do `HEAD` ↔ índice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiffSide {
+    Unstaged,
+    Staged,
 }
 
 /// Uma página do log. `cursor` ausente é a primeira.
@@ -65,12 +89,42 @@ pub trait RepoRead: Send + Sync {
     /// o caso. Não pagina: o número de pontas não cresce com o histórico.
     fn refs(&self) -> Result<Vec<RefMarker>, GitError>;
 
+    /// Os remotes configurados, na ordem em que o git os lista. É o que permite à sidebar
+    /// agrupar `origin/main` sob `origin` sem adivinhar onde o nome do remote termina.
+    fn remotes(&self) -> Result<Vec<Remote>, GitError>;
+
+    /// A pilha de stash, do topo (`stash@{0}`) para o fundo. Lista vazia quando `refs/stash`
+    /// não existe — repositório sem stash nenhum não é caso de erro.
+    fn stashes(&self) -> Result<Vec<StashEntry>, GitError>;
+
     /// Mensagem completa, assinaturas e o diffstat de um commit contra o primeiro pai.
     fn commit_detail(&self, oid: &str) -> Result<CommitDetail, GitError>;
 
     /// Hunks de **um** arquivo dentro do commit, contra o primeiro pai — o patch de verdade,
     /// sob demanda. `path` é o caminho atual do arquivo (o novo lado de um rename).
     fn commit_diff(&self, oid: &str, path: &str) -> Result<FileDiff, GitError>;
+
+    /// A diferença acumulada entre **dois pontos quaisquer** do histórico — dois commits, duas
+    /// branches, uma tag e uma branch (Passo 56). `from` e `to` são revisões como o terminal as
+    /// entende (hash, nome de branch, `HEAD~2`), resolvidas aqui.
+    fn range_diff(&self, from: &str, to: &str) -> Result<RangeDiff, GitError>;
+
+    /// Os hunks de **um** arquivo dentro dessa comparação, sob demanda — o mesmo desenho do
+    /// `commit_diff`, com dois lados escolhidos em vez do par commit/pai.
+    fn range_file_diff(&self, from: &str, to: &str, path: &str) -> Result<FileDiff, GitError>;
+
+    /// Hunks de **um** arquivo do trabalho local, do lado pedido: índice ↔ worktree
+    /// (`Unstaged`) ou `HEAD` ↔ índice (`Staged`). Mesma forma de saída do `commit_diff`, para
+    /// o visualizador do Passo 41 servir aos dois sem saber de onde o patch veio.
+    fn worktree_diff(&self, side: DiffSide, path: &str) -> Result<FileDiff, GitError>;
+
+    /// O **patch cru** do mesmo arquivo e do mesmo lado, como o git o escreveria: cabeçalho
+    /// (`diff --git`, `new file mode`, `---`/`+++`) e hunks, em texto.
+    ///
+    /// Existe separado do `worktree_diff` porque o recorte por hunk (`crate::patch`) precisa do
+    /// cabeçalho de verdade para entregar ao `git apply`, e nada disso cabe na `FileDiff` que a
+    /// interface consome. A numeração dos hunks é a mesma nas duas — vêm da mesma montagem.
+    fn worktree_patch(&self, side: DiffSide, path: &str) -> Result<String, GitError>;
 
     /// Varre o histórico completo a partir do `HEAD`, chamando `on_commit` uma vez por commit —
     /// para a indexação de busca, não para o log (que pagina e calcula lanes). Devolve o oid do
@@ -337,6 +391,57 @@ impl RepoRead for Git2Repo {
         Ok(markers)
     }
 
+    fn remotes(&self) -> Result<Vec<Remote>, GitError> {
+        let repo = Repository::open(&self.path).map_err(GitError::Read)?;
+
+        let names = repo.remotes().map_err(GitError::Read)?;
+        let mut remotes = Vec::with_capacity(names.len());
+
+        for name in names.iter() {
+            // `iter()` entrega `None` para nome não-UTF-8. Um remote assim existe no disco mas
+            // não tem como ser nomeado na interface — descartar é mais honesto que renderizar
+            // um nome remendado que nenhum comando aceitaria de volta.
+            let Ok(Some(name)) = name else { continue };
+            let Ok(remote) = repo.find_remote(name) else {
+                continue;
+            };
+
+            remotes.push(Remote {
+                name: name.to_owned(),
+                // `url()` devolve string vazia quando não há URL nenhuma, e `Err` quando ela
+                // não é UTF-8 — os dois casos viram `None`: não há o que mostrar, e mostrar
+                // uma URL remendada seria pior que não mostrar nada.
+                fetch_url: remote
+                    .url()
+                    .ok()
+                    .filter(|url| !url.is_empty())
+                    .map(str::to_owned),
+                push_url: remote.pushurl().ok().flatten().map(str::to_owned),
+            });
+        }
+
+        Ok(remotes)
+    }
+
+    fn stashes(&self) -> Result<Vec<StashEntry>, GitError> {
+        // `stash_foreach` pede `&mut Repository` mesmo só lendo: é o reflog de `refs/stash` que
+        // ele percorre, e o libgit2 marca a operação inteira como mutável.
+        let mut repo = Repository::open(&self.path).map_err(GitError::Read)?;
+
+        let mut entries = Vec::new();
+        repo.stash_foreach(|index, message, oid| {
+            entries.push(StashEntry {
+                index,
+                oid: oid.to_string(),
+                message: message.to_owned(),
+            });
+            true
+        })
+        .map_err(GitError::Read)?;
+
+        Ok(entries)
+    }
+
     fn commit_detail(&self, oid: &str) -> Result<CommitDetail, GitError> {
         let repo = Repository::open(&self.path).map_err(GitError::Read)?;
 
@@ -351,88 +456,8 @@ impl RepoRead for Git2Repo {
             Err(_) => None,
         };
 
-        let mut diff = repo
-            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
-            .map_err(GitError::Read)?;
-        diff.find_similar(None).map_err(GitError::Read)?;
-
-        // `Diff::stats()` só dá o agregado; a contagem por arquivo sai contando `+`/`-` linha a
-        // linha, por caminho — é o único jeito que o git2 expõe isso.
-        let mut per_file: std::collections::HashMap<String, (usize, usize)> =
-            std::collections::HashMap::new();
-        diff.foreach(
-            &mut |_delta, _progress| true,
-            None,
-            None,
-            Some(&mut |delta, _hunk, line| {
-                let origin = line.origin();
-                if origin != '+' && origin != '-' {
-                    return true;
-                }
-
-                let path = delta
-                    .new_file()
-                    .path()
-                    .or_else(|| delta.old_file().path())
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-
-                let entry = per_file.entry(path).or_insert((0, 0));
-                if origin == '+' {
-                    entry.0 += 1;
-                } else {
-                    entry.1 += 1;
-                }
-                true
-            }),
-        )
-        .map_err(GitError::Read)?;
-
-        let mut files = Vec::with_capacity(diff.deltas().len());
-        let (mut insertions, mut deletions) = (0, 0);
-
-        for delta in diff.deltas() {
-            let kind = match delta.status() {
-                git2::Delta::Added => FileChangeKind::Added,
-                git2::Delta::Deleted => FileChangeKind::Deleted,
-                git2::Delta::Renamed => FileChangeKind::Renamed,
-                git2::Delta::Copied => FileChangeKind::Copied,
-                git2::Delta::Typechange => FileChangeKind::Typechange,
-                // `Modified` é o padrão para o resto (inclui os estados que `diff_tree_to_tree`
-                // não produz, como `Untracked`/`Ignored` — só existem contra o worktree).
-                _ => FileChangeKind::Modified,
-            };
-
-            let new_path = delta
-                .new_file()
-                .path()
-                .map(|path| path.to_string_lossy().into_owned());
-            let old_path = delta
-                .old_file()
-                .path()
-                .map(|path| path.to_string_lossy().into_owned());
-
-            let path = new_path
-                .clone()
-                .or_else(|| old_path.clone())
-                .unwrap_or_default();
-            let (file_insertions, file_deletions) = per_file.get(&path).copied().unwrap_or((0, 0));
-
-            insertions += file_insertions;
-            deletions += file_deletions;
-
-            files.push(FileChange {
-                old_path: matches!(kind, FileChangeKind::Renamed | FileChangeKind::Copied)
-                    .then_some(old_path)
-                    .flatten()
-                    .filter(|old| Some(old) != new_path.as_ref()),
-                path,
-                kind,
-                insertions: file_insertions,
-                deletions: file_deletions,
-                binary: delta.flags().contains(git2::DiffFlags::BINARY),
-            });
-        }
+        let (insertions, deletions, files) =
+            summarize_trees(&repo, parent_tree.as_ref(), Some(&tree))?;
 
         let author = to_signature(&commit.author());
         let committer = to_signature(&commit.committer());
@@ -447,6 +472,54 @@ impl RepoRead for Git2Repo {
             deletions,
             files,
         })
+    }
+
+    fn range_diff(&self, from: &str, to: &str) -> Result<RangeDiff, GitError> {
+        let repo = Repository::open(&self.path).map_err(GitError::Read)?;
+
+        let (from_id, from_tree) = resolve_tree(&repo, from)?;
+        let (to_id, to_tree) = resolve_tree(&repo, to)?;
+
+        let (insertions, deletions, files) =
+            summarize_trees(&repo, Some(&from_tree), Some(&to_tree))?;
+
+        Ok(RangeDiff {
+            from: from_id,
+            to: to_id,
+            insertions,
+            deletions,
+            files,
+        })
+    }
+
+    fn range_file_diff(&self, from: &str, to: &str, path: &str) -> Result<FileDiff, GitError> {
+        let repo = Repository::open(&self.path).map_err(GitError::Read)?;
+
+        let (_, from_tree) = resolve_tree(&repo, from)?;
+        let (_, to_tree) = resolve_tree(&repo, to)?;
+
+        let mut diff = repo
+            .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)
+            .map_err(GitError::Read)?;
+        diff.find_similar(None).map_err(GitError::Read)?;
+
+        let index = diff
+            .deltas()
+            .position(|delta| {
+                delta
+                    .new_file()
+                    .path()
+                    .map(|p| p.to_string_lossy())
+                    .as_deref()
+                    == Some(path)
+            })
+            .ok_or(GitError::FileNotInCommit)?;
+
+        let patch = git2::Patch::from_diff(&diff, index)
+            .map_err(GitError::Read)?
+            .ok_or(GitError::FileNotInCommit)?;
+
+        patch_to_file_diff(&patch)
     }
 
     fn commit_diff(&self, oid: &str, path: &str) -> Result<FileDiff, GitError> {
@@ -485,56 +558,25 @@ impl RepoRead for Git2Repo {
             .map_err(GitError::Read)?
             .ok_or(GitError::FileNotInCommit)?;
 
-        // O `delta` de antes do patch nunca tem a flag `BINARY`: libgit2 só inspeciona o
-        // conteúdo (o teste de heurística, um `\0` nos primeiros bytes) ao montar o patch de
-        // verdade, e é o `delta` **do patch** que sai marcado — não o do diff que o gerou.
-        if patch.delta().flags().contains(git2::DiffFlags::BINARY) {
-            return Ok(FileDiff::Binary);
-        }
+        patch_to_file_diff(&patch)
+    }
 
-        let mut hunks = Vec::with_capacity(patch.num_hunks());
+    fn worktree_diff(&self, side: DiffSide, path: &str) -> Result<FileDiff, GitError> {
+        with_worktree_patch(&self.path, side, path, |patch| patch_to_file_diff(patch))
+    }
 
-        for hunk_index in 0..patch.num_hunks() {
-            let (hunk, line_count) = patch.hunk(hunk_index).map_err(GitError::Read)?;
+    fn worktree_patch(&self, side: DiffSide, path: &str) -> Result<String, GitError> {
+        with_worktree_patch(&self.path, side, path, |patch| {
+            let buf = patch.to_buf().map_err(GitError::Read)?;
 
-            // O cabeçalho do git ("@@ -a,b +c,d @@") já vem em UTF-8 na prática — é gerado
-            // pelo próprio libgit2, não copiado do arquivo. `lossy` aqui é só defensivo.
-            let header = String::from_utf8_lossy(hunk.header())
-                .trim_end_matches('\n')
-                .to_owned();
-            let mut lines = Vec::with_capacity(line_count);
-
-            for line_index in 0..line_count {
-                let line = patch
-                    .line_in_hunk(hunk_index, line_index)
-                    .map_err(GitError::Read)?;
-
-                // Diferente do cabeçalho: o conteúdo da linha vem direto do arquivo do
-                // usuário. Um encoding legado aqui não é binário (o git não marcou como
-                // tal), mas também não é UTF-8 — e mostrar como `lossy` produziria mojibake
-                // em vez de um patch legível. O commit inteiro vira `NotUtf8` nesse caso: um
-                // arquivo pela metade em UTF-8 e pela metade em mojibake seria pior que os
-                // dois estados claros.
-                let Ok(content) = std::str::from_utf8(line.content()) else {
-                    return Ok(FileDiff::NotUtf8);
-                };
-
-                lines.push(DiffLine {
-                    kind: match line.origin() {
-                        '+' => DiffLineKind::Addition,
-                        '-' => DiffLineKind::Deletion,
-                        _ => DiffLineKind::Context,
-                    },
-                    old_lineno: line.old_lineno(),
-                    new_lineno: line.new_lineno(),
-                    content: content.trim_end_matches('\n').to_owned(),
-                });
-            }
-
-            hunks.push(DiffHunk { header, lines });
-        }
-
-        Ok(FileDiff::Text { hunks })
+            // O patch é texto do arquivo do usuário: um encoding legado aqui não é UTF-8, e
+            // `lossy` produziria um patch que não bate mais com o conteúdo — o `git apply`
+            // recusaria, ou pior, aplicaria outra coisa. O mesmo `NotUtf8` que a UI já mostra
+            // no lugar do diff vira aqui a recusa de recortar.
+            std::str::from_utf8(&buf)
+                .map(str::to_owned)
+                .map_err(|_| GitError::NotUtf8)
+        })
     }
 
     fn walk_for_index(
@@ -666,6 +708,130 @@ impl RepoRead for Git2Repo {
     }
 }
 
+/// Monta o diff de **um** arquivo do trabalho local e entrega o `git2::Patch` a quem pediu.
+///
+/// Fecho e não valor de retorno: `Patch` empresta o `Diff`, que empresta o `Repository`, e os
+/// três morrem no fim desta função. Existe para o diff que a UI lê e o patch cru que o recorte
+/// (`crate::patch`) precisa saírem da **mesma** montagem — dois caminhos separados seriam duas
+/// chances de a numeração de hunk que a UI mostra não ser a que o `git apply` recebe.
+fn with_worktree_patch<T>(
+    repo_path: &Path,
+    side: DiffSide,
+    path: &str,
+    // `&mut`: `Patch::to_buf` do libgit2 pede mutável (ele materializa o texto sob demanda).
+    consume: impl FnOnce(&mut git2::Patch<'_>) -> Result<T, GitError>,
+) -> Result<T, GitError> {
+    let repo = Repository::open(repo_path).map_err(GitError::Read)?;
+
+    let mut options = git2::DiffOptions::new();
+    // Pathspec com `disable_pathspec_match`: comparação literal, não glob. Um arquivo de
+    // verdade chamado `notas[1].txt` não pode virar padrão só por ter colchete no nome.
+    options.pathspec(path);
+    options.disable_pathspec_match(true);
+    // Sem isto um arquivo novo não teria diff nenhum do lado `Unstaged` — e é justamente o
+    // arquivo novo que a pessoa quer olhar antes de stagear pela primeira vez.
+    options.include_untracked(true);
+    options.show_untracked_content(true);
+    options.recurse_untracked_dirs(true);
+
+    let diff = match side {
+        DiffSide::Unstaged => repo.diff_index_to_workdir(None, Some(&mut options)),
+        DiffSide::Staged => {
+            // `HEAD` unborn não tem árvore: o diff é contra o vazio, e tudo que está no índice
+            // aparece como adição — o mesmo que `git diff --cached` mostra ali.
+            let tree = match head_tip(&repo)? {
+                Some(oid) => Some(
+                    repo.find_commit(oid)
+                        .map_err(GitError::Read)?
+                        .tree()
+                        .map_err(GitError::Read)?,
+                ),
+                None => None,
+            };
+
+            repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut options))
+        }
+    }
+    .map_err(GitError::Read)?;
+
+    // Sem `find_similar` aqui, ao contrário do `commit_diff`: com o diff já reduzido a um
+    // pathspec, não há o outro lado do par para a detecção de rename encontrar. Um arquivo
+    // renomeado e stageado aparece como adição do caminho novo — que é exatamente o caminho que
+    // o `status` deu à UI, e o conteúdo mostrado é o certo.
+    let index = diff
+        .deltas()
+        .position(|delta| {
+            let matches = |file: git2::DiffFile<'_>| {
+                file.path().map(|p| p.to_string_lossy()).as_deref() == Some(path)
+            };
+            matches(delta.new_file()) || matches(delta.old_file())
+        })
+        .ok_or(GitError::FileUnchanged)?;
+
+    let mut patch = git2::Patch::from_diff(&diff, index)
+        .map_err(GitError::Read)?
+        .ok_or(GitError::FileUnchanged)?;
+
+    consume(&mut patch)
+}
+
+/// Um patch do libgit2 vira os hunks que a UI desenha.
+///
+/// Compartilhada pelo diff de commit e pelo do trabalho local: as duas produzem um
+/// `git2::Patch` de um arquivo só, e a diferença entre elas está inteira em **como** o patch
+/// foi gerado, não em como ele se lê.
+fn patch_to_file_diff(patch: &git2::Patch<'_>) -> Result<FileDiff, GitError> {
+    // O `delta` de antes do patch nunca tem a flag `BINARY`: libgit2 só inspeciona o conteúdo
+    // (o teste de heurística, um `\0` nos primeiros bytes) ao montar o patch de verdade, e é o
+    // `delta` **do patch** que sai marcado — não o do diff que o gerou.
+    if patch.delta().flags().contains(git2::DiffFlags::BINARY) {
+        return Ok(FileDiff::Binary);
+    }
+
+    let mut hunks = Vec::with_capacity(patch.num_hunks());
+
+    for hunk_index in 0..patch.num_hunks() {
+        let (hunk, line_count) = patch.hunk(hunk_index).map_err(GitError::Read)?;
+
+        // O cabeçalho do git ("@@ -a,b +c,d @@") já vem em UTF-8 na prática — é gerado pelo
+        // próprio libgit2, não copiado do arquivo. `lossy` aqui é só defensivo.
+        let header = String::from_utf8_lossy(hunk.header())
+            .trim_end_matches('\n')
+            .to_owned();
+        let mut lines = Vec::with_capacity(line_count);
+
+        for line_index in 0..line_count {
+            let line = patch
+                .line_in_hunk(hunk_index, line_index)
+                .map_err(GitError::Read)?;
+
+            // Diferente do cabeçalho: o conteúdo da linha vem direto do arquivo do usuário. Um
+            // encoding legado aqui não é binário (o git não marcou como tal), mas também não é
+            // UTF-8 — e mostrar como `lossy` produziria mojibake em vez de um patch legível. O
+            // arquivo inteiro vira `NotUtf8` nesse caso: metade em UTF-8 e metade em mojibake
+            // seria pior que os dois estados claros.
+            let Ok(content) = std::str::from_utf8(line.content()) else {
+                return Ok(FileDiff::NotUtf8);
+            };
+
+            lines.push(DiffLine {
+                kind: match line.origin() {
+                    '+' => DiffLineKind::Addition,
+                    '-' => DiffLineKind::Deletion,
+                    _ => DiffLineKind::Context,
+                },
+                old_lineno: line.old_lineno(),
+                new_lineno: line.new_lineno(),
+                content: content.trim_end_matches('\n').to_owned(),
+            });
+        }
+
+        hunks.push(DiffHunk { header, lines });
+    }
+
+    Ok(FileDiff::Text { hunks })
+}
+
 fn to_signature(sig: &git2::Signature<'_>) -> Signature {
     Signature {
         name: String::from_utf8_lossy(sig.name_bytes()).into_owned(),
@@ -794,6 +960,120 @@ fn display_name(root: &Path) -> String {
     // Em bare o caminho termina em `.git`; em worktree normal `root` é a worktree, então esta
     // poda não pega o gitdir por engano.
     name.strip_suffix(".git").unwrap_or(&name).to_owned()
+}
+
+/// Resolve uma revisão (hash, branch, tag, `HEAD~2`…) para o oid e a árvore dela.
+///
+/// `revparse_single` é a mesma resolução que o terminal faz. Aqui ela é segura de um jeito que
+/// não seria num shell-out: nada disto vira `argv`, é chamada de biblioteca dentro do próprio
+/// repositório do usuário. O que ela não resolve vira `InvalidCommit` — 400, não 500.
+fn resolve_tree<'r>(repo: &'r Repository, rev: &str) -> Result<(String, git2::Tree<'r>), GitError> {
+    let object = repo
+        .revparse_single(rev)
+        .map_err(|_| GitError::InvalidCommit)?;
+
+    let id = object.id().to_string();
+    let tree = object.peel_to_tree().map_err(|_| GitError::InvalidCommit)?;
+
+    Ok((id, tree))
+}
+
+/// Diffstat entre duas árvores: total e por arquivo.
+///
+/// Compartilhada pelo detalhe de commit (árvore do pai ↔ árvore do commit) e pela comparação
+/// arbitrária (duas árvores quaisquer) — é literalmente a mesma conta, e tê-la em dois lugares
+/// seria ter dois lugares onde a contagem por arquivo pode divergir do agregado.
+fn summarize_trees(
+    repo: &Repository,
+    old: Option<&git2::Tree<'_>>,
+    new: Option<&git2::Tree<'_>>,
+) -> Result<(usize, usize, Vec<FileChange>), GitError> {
+    let mut diff = repo
+        .diff_tree_to_tree(old, new, None)
+        .map_err(GitError::Read)?;
+    diff.find_similar(None).map_err(GitError::Read)?;
+
+    // `Diff::stats()` só dá o agregado; a contagem por arquivo sai contando `+`/`-` linha a
+    // linha, por caminho — é o único jeito que o git2 expõe isso.
+    let mut per_file: std::collections::HashMap<String, (usize, usize)> =
+        std::collections::HashMap::new();
+    {
+        diff.foreach(
+            &mut |_delta, _progress| true,
+            None,
+            None,
+            Some(&mut |delta, _hunk, line| {
+                let origin = line.origin();
+                if origin != '+' && origin != '-' {
+                    return true;
+                }
+
+                let path = delta
+                    .new_file()
+                    .path()
+                    .or_else(|| delta.old_file().path())
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+
+                let entry = per_file.entry(path).or_insert((0, 0));
+                if origin == '+' {
+                    entry.0 += 1;
+                } else {
+                    entry.1 += 1;
+                }
+                true
+            }),
+        )
+        .map_err(GitError::Read)?;
+
+        let mut files = Vec::with_capacity(diff.deltas().len());
+        let (mut insertions, mut deletions) = (0, 0);
+
+        for delta in diff.deltas() {
+            let kind = match delta.status() {
+                git2::Delta::Added => FileChangeKind::Added,
+                git2::Delta::Deleted => FileChangeKind::Deleted,
+                git2::Delta::Renamed => FileChangeKind::Renamed,
+                git2::Delta::Copied => FileChangeKind::Copied,
+                git2::Delta::Typechange => FileChangeKind::Typechange,
+                // `Modified` é o padrão para o resto (inclui os estados que `diff_tree_to_tree`
+                // não produz, como `Untracked`/`Ignored` — só existem contra o worktree).
+                _ => FileChangeKind::Modified,
+            };
+
+            let new_path = delta
+                .new_file()
+                .path()
+                .map(|path| path.to_string_lossy().into_owned());
+            let old_path = delta
+                .old_file()
+                .path()
+                .map(|path| path.to_string_lossy().into_owned());
+
+            let path = new_path
+                .clone()
+                .or_else(|| old_path.clone())
+                .unwrap_or_default();
+            let (file_insertions, file_deletions) = per_file.get(&path).copied().unwrap_or((0, 0));
+
+            insertions += file_insertions;
+            deletions += file_deletions;
+
+            files.push(FileChange {
+                old_path: matches!(kind, FileChangeKind::Renamed | FileChangeKind::Copied)
+                    .then_some(old_path)
+                    .flatten()
+                    .filter(|old| Some(old) != new_path.as_ref()),
+                path,
+                kind,
+                insertions: file_insertions,
+                deletions: file_deletions,
+                binary: delta.flags().contains(git2::DiffFlags::BINARY),
+            });
+        }
+
+        Ok((insertions, deletions, files))
+    }
 }
 
 #[cfg(test)]
@@ -1118,6 +1398,84 @@ mod tests {
     }
 
     #[test]
+    fn remotes_do_projeto_incluem_o_origin() {
+        let repo = Git2Repo::open(&project_root()).unwrap();
+        let remotes = repo.remotes().unwrap();
+
+        let origin = remotes
+            .iter()
+            .find(|remote| remote.name == "origin")
+            .expect("este checkout tem um remote origin");
+
+        assert!(
+            origin
+                .fetch_url
+                .as_deref()
+                .is_some_and(|url| !url.trim().is_empty()),
+            "o origin deveria ter URL de fetch"
+        );
+        // Sem `remote.origin.pushurl` configurada, o push usa a mesma URL — e o campo fica
+        // vazio de propósito, para a UI não mostrar duas linhas idênticas.
+        assert!(origin.push_url.is_none());
+    }
+
+    #[test]
+    fn pilha_de_stash_vai_do_topo_para_o_fundo() {
+        let dir = temp("stash");
+        let repo = Repository::init(&dir).unwrap();
+        let sig = git2::Signature::new(
+            "Teste",
+            "teste@example.com",
+            &git2::Time::new(1_700_000_000, 0),
+        )
+        .unwrap();
+
+        // Um commit de partida: sem `HEAD` resolvido não há de onde stashar.
+        std::fs::write(dir.join("a.txt"), "v1\n").unwrap();
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+            index.write_tree().unwrap()
+        };
+        {
+            let tree = repo.find_tree(tree_id).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[])
+                .unwrap();
+        }
+
+        let mut repo = repo;
+        let vazio = Git2Repo::open(&dir).unwrap().stashes().unwrap();
+        assert!(vazio.is_empty(), "repositório novo não tem stash nenhum");
+
+        std::fs::write(dir.join("a.txt"), "v2\n").unwrap();
+        repo.stash_save(&sig, "primeiro", None).unwrap();
+        std::fs::write(dir.join("a.txt"), "v3\n").unwrap();
+        repo.stash_save(&sig, "segundo", None).unwrap();
+        drop(repo);
+
+        let stashes = Git2Repo::open(&dir).unwrap().stashes().unwrap();
+        assert_eq!(stashes.len(), 2);
+
+        // O último a entrar é o `stash@{0}` — a pilha sai na mesma ordem que o
+        // `git stash list` imprime.
+        assert_eq!(stashes[0].index, 0);
+        assert!(
+            stashes[0].message.contains("segundo"),
+            "topo da pilha: {:?}",
+            stashes[0].message
+        );
+        assert_eq!(stashes[1].index, 1);
+        assert!(stashes[1].message.contains("primeiro"));
+        assert_ne!(stashes[0].oid, stashes[1].oid);
+
+        // Stashar restaura o arquivo: o que sobrou no disco é o conteúdo commitado.
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v1\n");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn commit_invalido_e_recusado() {
         let repo = Git2Repo::open(&project_root()).unwrap();
 
@@ -1374,6 +1732,237 @@ mod tests {
 
         let repo = Git2Repo::open(&dir).unwrap();
         assert_eq!(repo.state().unwrap(), model::RepoState::Merge);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Repositório com um commit só, contendo um arquivo. É o mínimo para haver os dois lados
+    /// (`HEAD` ↔ índice e índice ↔ worktree) de que o Passo 49 fala.
+    fn repo_com_um_commit(dir: &Path, name: &str, content: &str) {
+        let repo = Repository::init(dir).unwrap();
+        std::fs::write(dir.join(name), content).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(name)).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::new(
+            "Teste",
+            "teste@example.com",
+            &git2::Time::new(1_700_000_000, 0),
+        )
+        .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "root", &tree, &[])
+            .unwrap();
+    }
+
+    fn linhas(diff: &FileDiff) -> Vec<(DiffLineKind, String)> {
+        let FileDiff::Text { hunks } = diff else {
+            panic!("esperava texto, veio {diff:?}");
+        };
+
+        hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter())
+            .map(|line| (line.kind, line.content.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn mudanca_so_no_worktree_aparece_de_um_lado_so() {
+        let dir = temp("wt-diff-unstaged");
+        repo_com_um_commit(&dir, "a.txt", "um\n");
+        std::fs::write(dir.join("a.txt"), "um\ndois\n").unwrap();
+
+        let repo = Git2Repo::open(&dir).unwrap();
+
+        let unstaged = repo.worktree_diff(DiffSide::Unstaged, "a.txt").unwrap();
+        assert_eq!(
+            linhas(&unstaged),
+            vec![
+                (DiffLineKind::Context, "um".to_owned()),
+                (DiffLineKind::Addition, "dois".to_owned()),
+            ]
+        );
+
+        // Nada foi stageado: do lado do índice não há mudança nenhuma para mostrar.
+        assert!(matches!(
+            repo.worktree_diff(DiffSide::Staged, "a.txt"),
+            Err(GitError::FileUnchanged)
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn depois_do_add_a_mesma_mudanca_troca_de_lado() {
+        let dir = temp("wt-diff-staged");
+        repo_com_um_commit(&dir, "a.txt", "um\n");
+        std::fs::write(dir.join("a.txt"), "um\ndois\n").unwrap();
+
+        {
+            let git2_repo = Repository::open(&dir).unwrap();
+            let mut index = git2_repo.index().unwrap();
+            index.add_path(Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+        }
+
+        let repo = Git2Repo::open(&dir).unwrap();
+
+        let staged = repo.worktree_diff(DiffSide::Staged, "a.txt").unwrap();
+        assert_eq!(
+            linhas(&staged),
+            vec![
+                (DiffLineKind::Context, "um".to_owned()),
+                (DiffLineKind::Addition, "dois".to_owned()),
+            ]
+        );
+        assert!(matches!(
+            repo.worktree_diff(DiffSide::Unstaged, "a.txt"),
+            Err(GitError::FileUnchanged)
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn arquivo_novo_vem_inteiro_como_adicao_antes_de_qualquer_add() {
+        let dir = temp("wt-diff-untracked");
+        repo_com_um_commit(&dir, "a.txt", "um\n");
+        std::fs::write(dir.join("novo.txt"), "linha\noutra\n").unwrap();
+
+        let repo = Git2Repo::open(&dir).unwrap();
+        let diff = repo.worktree_diff(DiffSide::Unstaged, "novo.txt").unwrap();
+
+        assert_eq!(
+            linhas(&diff),
+            vec![
+                (DiffLineKind::Addition, "linha".to_owned()),
+                (DiffLineKind::Addition, "outra".to_owned()),
+            ]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn comparar_por_nome_de_revisao_resolve_os_dois_lados() {
+        let dir = temp("range-revisoes");
+        build_merge_repo(&dir);
+        let repo = Git2Repo::open(&dir).unwrap();
+
+        // O que se prova aqui é a **resolução**: nem "HEAD" nem "HEAD~2" são hashes, e os dois
+        // lados voltam como oid completo. (As árvores do repositório sintético são iguais em
+        // todos os commits, então não há diferença de conteúdo para contar.)
+        let intervalo = repo.range_diff("HEAD~2", "HEAD").unwrap();
+        assert_eq!(intervalo.from.len(), 40);
+        assert_eq!(intervalo.to.len(), 40);
+        assert_ne!(intervalo.from, intervalo.to);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn comparar_dois_commits_deste_projeto_bate_com_o_commit_do_meio() {
+        let repo = Git2Repo::open(&project_root()).unwrap();
+
+        // Comparar um commit com o pai dele tem que dar exatamente o mesmo diffstat que o
+        // detalhe daquele commit — é a mesma diferença, pedida por dois caminhos diferentes.
+        let detalhe = repo
+            .commit_detail("9db77b8e291c73877e0052d085d5c2236967b062")
+            .unwrap();
+        let intervalo = repo
+            .range_diff(
+                "9db77b8e291c73877e0052d085d5c2236967b062^",
+                "9db77b8e291c73877e0052d085d5c2236967b062",
+            )
+            .unwrap();
+
+        assert_eq!(intervalo.insertions, detalhe.insertions);
+        assert_eq!(intervalo.deletions, detalhe.deletions);
+        assert_eq!(intervalo.files.len(), detalhe.files.len());
+        assert_eq!(intervalo.to, detalhe.oid);
+    }
+
+    #[test]
+    fn arquivo_dentro_da_comparacao_traz_os_mesmos_hunks_do_commit() {
+        let repo = Git2Repo::open(&project_root()).unwrap();
+        let oid = "9db77b8e291c73877e0052d085d5c2236967b062";
+
+        let caminho = &repo.commit_detail(oid).unwrap().files[0].path.clone();
+
+        let pelo_commit = repo.commit_diff(oid, caminho).unwrap();
+        let pelo_intervalo = repo
+            .range_file_diff(&format!("{oid}^"), oid, caminho)
+            .unwrap();
+
+        let contar = |diff: &FileDiff| match diff {
+            FileDiff::Text { hunks } => hunks.iter().map(|hunk| hunk.lines.len()).sum::<usize>(),
+            _ => 0,
+        };
+        assert_eq!(contar(&pelo_commit), contar(&pelo_intervalo));
+        assert!(contar(&pelo_commit) > 0, "o arquivo tem mudança de verdade");
+    }
+
+    #[test]
+    fn revisao_que_nao_existe_e_pedido_invalido() {
+        let repo = Git2Repo::open(&project_root()).unwrap();
+
+        for rev in ["nao-existe-esta-branch", "zzzzzzz", ""] {
+            assert!(
+                matches!(repo.range_diff(rev, "HEAD"), Err(GitError::InvalidCommit)),
+                "revisão {rev:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn o_patch_cru_traz_o_cabecalho_que_o_recorte_precisa() {
+        let dir = temp("wt-patch-cru");
+        repo_com_um_commit(&dir, "a.txt", "um\ndois\ntres\n");
+        std::fs::write(dir.join("a.txt"), "um\nDOIS\ntres\n").unwrap();
+
+        let repo = Git2Repo::open(&dir).unwrap();
+        let raw = repo.worktree_patch(DiffSide::Unstaged, "a.txt").unwrap();
+
+        // O cabeçalho é o que a `FileDiff` não carrega e o `git apply` exige.
+        assert!(raw.contains("diff --git a/a.txt b/a.txt"), "{raw}");
+        assert!(raw.contains("--- a/a.txt"), "{raw}");
+        assert!(raw.contains("+++ b/a.txt"), "{raw}");
+
+        // E o parser do recorte entende o que o libgit2 escreveu — é o contrato entre os dois.
+        let patch = crate::patch::parse(&raw).unwrap();
+        assert_eq!(patch.hunks.len(), 1);
+        assert_eq!(patch.hunks[0].old_start, 1);
+
+        // Mesma numeração de hunk nos dois caminhos: é o que garante que o índice que a UI
+        // mostra é o índice que o `git apply` vai receber.
+        let FileDiff::Text { hunks } = repo.worktree_diff(DiffSide::Unstaged, "a.txt").unwrap()
+        else {
+            panic!("esperava texto");
+        };
+        assert_eq!(hunks.len(), patch.hunks.len());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn arquivo_limpo_nao_tem_diff_de_nenhum_dos_dois_lados() {
+        let dir = temp("wt-diff-limpo");
+        repo_com_um_commit(&dir, "a.txt", "um\n");
+
+        let repo = Git2Repo::open(&dir).unwrap();
+        for side in [DiffSide::Unstaged, DiffSide::Staged] {
+            assert!(
+                matches!(
+                    repo.worktree_diff(side, "a.txt"),
+                    Err(GitError::FileUnchanged)
+                ),
+                "lado {side:?}"
+            );
+        }
 
         std::fs::remove_dir_all(&dir).ok();
     }

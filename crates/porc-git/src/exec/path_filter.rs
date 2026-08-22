@@ -121,6 +121,30 @@ mod tests {
             .to_path_buf()
     }
 
+    /// O que o `git log` de verdade responde para os mesmos argumentos, agora.
+    ///
+    /// A referência **não** pode ser uma lista de oids escrita à mão: estes testes rodam contra
+    /// o próprio repositório do porcelain, e cada commit novo mudava a resposta certa — foi
+    /// exatamente o que aconteceu no commit que fechou o Bloco D, deixando três testes
+    /// vermelhos sem nenhum bug por trás. Comparar contra o comando de verdade é o que fixa o
+    /// contrato ("a mesma coisa que o git responderia") em vez de fixar um instante do
+    /// histórico.
+    fn git_log(args: &[&str]) -> Vec<String> {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project_root())
+            .args(["log", "--format=%H"])
+            .args(args)
+            .output()
+            .expect("o git do sistema precisa existir para este teste");
+
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
     #[tokio::test]
     async fn traz_so_os_commits_que_tocaram_o_arquivo() {
         let root = project_root();
@@ -132,16 +156,9 @@ mod tests {
         .await
         .unwrap();
 
-        // `git log --oneline -- PROGRESSO.md` neste repositório, hoje: os três commits que
-        // existem tocaram o arquivo (o andaime inicial já o cria).
-        assert_eq!(
-            oids,
-            [
-                "9db77b8e291c73877e0052d085d5c2236967b062",
-                "0b61c6f62675d70dec6e486da71f89b9cd6a6561",
-                "2cea64adc1a40be6a9388b50800daea31c850d84",
-            ]
-        );
+        let esperado = git_log(&["--", "PROGRESSO.md"]);
+        assert!(!esperado.is_empty(), "o arquivo existe no histórico");
+        assert_eq!(oids, esperado);
     }
 
     #[tokio::test]
@@ -208,16 +225,9 @@ mod tests {
         .await
         .unwrap();
 
-        // `git log --oneline -S"porcelain"` neste repositório, hoje: os três commits — a
-        // palavra aparece e muda de contagem em cada um dos três.
-        assert_eq!(
-            oids,
-            [
-                "9db77b8e291c73877e0052d085d5c2236967b062",
-                "0b61c6f62675d70dec6e486da71f89b9cd6a6561",
-                "2cea64adc1a40be6a9388b50800daea31c850d84",
-            ]
-        );
+        let esperado = git_log(&["-S", "porcelain"]);
+        assert!(!esperado.is_empty(), "a palavra existe no histórico");
+        assert_eq!(oids, esperado);
     }
 
     #[tokio::test]
@@ -234,14 +244,9 @@ mod tests {
         .await
         .unwrap();
 
-        // `git log --oneline -G"fn open\("` neste repositório, hoje: dois commits.
-        assert_eq!(
-            oids,
-            [
-                "9db77b8e291c73877e0052d085d5c2236967b062",
-                "0b61c6f62675d70dec6e486da71f89b9cd6a6561",
-            ]
-        );
+        let esperado = git_log(&["-G", r"fn open\("]);
+        assert!(!esperado.is_empty(), "a expressão existe no histórico");
+        assert_eq!(oids, esperado);
     }
 
     #[tokio::test]
@@ -249,9 +254,21 @@ mod tests {
         let root = project_root();
         let mut count = 0;
 
+        // Carimbo de tempo, e não um literal fixo: o teste roda contra o repositório do próprio
+        // porcelain, então uma agulha literal entra no histórico no commit seguinte e passa a
+        // ser encontrada pela busca que ela existe para não encontrar. Foi o que aconteceu com a
+        // versão anterior deste teste. Um nanossegundo do futuro nunca esteve num commit.
+        let agulha = format!(
+            "agulha-que-nao-existe-{:?}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
         by_content(
             &root,
-            &ContentMode::StringCount("string-que-nunca-existiu-em-lugar-nenhum".to_owned()),
+            &ContentMode::StringCount(agulha),
             CancellationToken::new(),
             |_| count += 1,
         )

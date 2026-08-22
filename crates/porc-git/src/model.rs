@@ -75,6 +75,36 @@ pub struct RefMarker {
     pub is_head: bool,
 }
 
+/// Um remote configurado — o que o `git remote -v` lista.
+///
+/// A sidebar precisa dele para **agrupar** as branches remotas: o nome curto de uma remota é
+/// `origin/main`, e partir na primeira barra acerta quase sempre, mas o git aceita remote com
+/// barra no nome. Quem sabe onde o nome do remote termina é o próprio git.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Remote {
+    pub name: String,
+    /// `None` num remote sem URL de fetch — raro, mas o git aceita a configuração.
+    pub fetch_url: Option<String>,
+    /// Só presente quando existe `remote.<nome>.pushurl` própria.
+    pub push_url: Option<String>,
+}
+
+/// Uma entrada da pilha de stash.
+///
+/// Não é uma `RefMarker`: `refs/stash` é uma ref só, e a pilha inteira vive no **reflog** dela.
+/// Marcar o log com "stash" seria marcar um commit que nem está no histórico.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    /// Posição na pilha: 0 é o topo, o `stash@{0}` do terminal.
+    pub index: usize,
+    pub oid: String,
+    /// Como o git a escreveu (`WIP on main: 1234567 assunto`), sem reescrita nossa: é a mesma
+    /// linha que o `git stash list` mostra, e quem stashou reconhece.
+    pub message: String,
+}
+
 /// Uma linha do log, já com a coluna do grafo.
 ///
 /// `lane` é a coluna desta linha; `parent_lanes` é a coluna para onde cada aresta desce, na
@@ -167,6 +197,24 @@ pub struct CommitDetail {
     pub committer: Signature,
     /// Mensagem completa — resumo (primeira linha) e corpo, como o git guarda.
     pub message: String,
+    pub insertions: usize,
+    pub deletions: usize,
+    pub files: Vec<FileChange>,
+}
+
+/// A comparação entre **dois pontos quaisquer** do histórico — dois commits, duas branches,
+/// uma tag e uma branch (Passo 56).
+///
+/// Não é `CommitDetail` com outro nome: aqui não há autor, committer nem mensagem, porque não
+/// há um commit sendo mostrado. O que existe é a diferença acumulada entre dois lados, que é
+/// justamente o que ninguém consegue ver commit a commit.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeDiff {
+    /// Oid **resolvido** do lado esquerdo. A UI manda `main` ou `v1.0`; o que volta é o hash,
+    /// para ficar claro o que foi comparado de verdade.
+    pub from: String,
+    pub to: String,
     pub insertions: usize,
     pub deletions: usize,
     pub files: Vec<FileChange>,

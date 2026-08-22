@@ -18,8 +18,12 @@ import { NewRepo } from "../features/browse/NewRepo";
 import { Recents } from "../features/browse/Recents";
 import { AskpassPrompt } from "../features/jobs/AskpassPrompt";
 import { JobsPanel } from "../features/jobs/JobsPanel";
+import { CompareView } from "../features/compare/CompareView";
 import { CommitDetail } from "../features/log/CommitDetail";
 import { Log } from "../features/log/Log";
+import { Sidebar } from "../features/sidebar/Sidebar";
+import { StatusDetail } from "../features/status/StatusDetail";
+import { StatusPanel } from "../features/status/StatusPanel";
 import type { Repo } from "../lib/api-types";
 import { useJobEvents, useStartTestJob } from "../lib/jobs";
 import { useLayout } from "../lib/layout";
@@ -82,46 +86,40 @@ function StatusBar() {
   );
 }
 
-function SidebarGroup({ title, items }: { title: string; items: readonly string[] }) {
+/* O centro tem três assuntos — o histórico, o trabalho local e a comparação entre dois pontos —
+ * e o `CLAUDE.md` os põe no mesmo lugar ("centro (log ou status)"). Abas, não painéis: os três
+ * querem a largura inteira e o teclado inteiro, e nenhum é consultado enquanto outro é usado. */
+function CenterTabs({ view, onChange }: { view: CenterView; onChange: (view: CenterView) => void }) {
+  const tab = (value: CenterView, label: string) => (
+    <button
+      type="button"
+      onClick={() => onChange(value)}
+      className={`text-xs px-1.5 py-0.5 rounded-sm border transition-colors duration-(--duration-fast) ${
+        view === value ? "border-n-7 bg-n-4 text-n-11" : "border-n-6 text-n-9 hover:text-n-11"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <section className="py-2">
-      <h2 className="px-3 pb-1 text-xs uppercase tracking-[0.1em] text-n-8">{title}</h2>
-      <ul>
-        {items.map((item) => (
-          <li
-            key={item}
-            className="px-3 py-0.5 text-sm text-n-10 truncate hover:bg-n-3 transition-colors duration-(--duration-fast)"
-          >
-            {item}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <div className="flex items-center gap-1 shrink-0">
+      {tab("log", "log")}
+      {tab("status", "status")}
+      {tab("compare", "comparar")}
+    </div>
   );
 }
 
-function Sidebar({ width, repo }: { width: number; repo: Repo | undefined }) {
-  return (
-    <aside className="shrink-0 overflow-y-auto border-r border-n-5 bg-n-1" style={{ width }}>
-      {repo ? (
-        <>
-          <section className="px-3 py-2 border-b border-n-5">
-            <p className="text-base text-n-11 truncate">{repo.name}</p>
-            <p className="mt-0.5 text-xs font-mono text-n-8 break-all">{repo.path}</p>
-          </section>
-          {/* Placeholder até o Bloco F: refs de verdade pedem rota própria. */}
-          <SidebarGroup title="branches" items={[repo.branch]} />
-        </>
-      ) : (
-        <p className="px-3 py-2 text-sm text-n-9">
-          escolha uma pasta no centro. as marcadas com ◆ já são repositórios.
-        </p>
-      )}
-    </aside>
-  );
-}
-
-function Center({ repo }: { repo: Repo | undefined }) {
+function Center({
+  repo,
+  view,
+  onView,
+}: {
+  repo: Repo | undefined;
+  view: CenterView;
+  onView: (view: CenterView) => void;
+}) {
   const open = useOpenRepoMutation();
   // A pasta em que o navegador está. Sobe até aqui porque é o formulário de criar, que é irmão
   // do navegador e não filho dele, que precisa saber onde o `git init` vai acontecer.
@@ -139,15 +137,21 @@ function Center({ repo }: { repo: Repo | undefined }) {
   if (repo) {
     return (
       <main className="flex-1 min-w-0 min-h-0 flex flex-col bg-n-0">
-        <div className="px-3 py-2 border-b border-n-5 shrink-0">
-          <p className="text-base text-n-11">{repo.name}</p>
-          <p className="mt-0.5 text-sm font-mono text-n-9">
-            {repo.head.kind === "unborn"
-              ? `${repo.branch} · nenhum commit ainda`
-              : `${repo.branch} · ${repo.head.commit.slice(0, 12)}`}
-          </p>
+        <div className="flex items-center gap-3 px-3 py-2 border-b border-n-5 shrink-0">
+          <div className="min-w-0">
+            <p className="text-base text-n-11 truncate">{repo.name}</p>
+            <p className="mt-0.5 text-sm font-mono text-n-9 truncate">
+              {repo.head.kind === "unborn"
+                ? `${repo.branch} · nenhum commit ainda`
+                : `${repo.branch} · ${repo.head.commit.slice(0, 12)}`}
+            </p>
+          </div>
+          <span className="flex-1" />
+          <CenterTabs view={view} onChange={onView} />
         </div>
-        <Log repoId={repo.repoId} />
+        {view === "log" && <Log repoId={repo.repoId} />}
+        {view === "status" && <StatusPanel repoId={repo.repoId} />}
+        {view === "compare" && <CompareView repoId={repo.repoId} />}
       </main>
     );
   }
@@ -175,10 +179,22 @@ function Center({ repo }: { repo: Repo | undefined }) {
   );
 }
 
-function Detail({ width, repo }: { width: number; repo: Repo | undefined }) {
+function Detail({
+  width,
+  repo,
+  view,
+}: {
+  width: number;
+  repo: Repo | undefined;
+  view: CenterView;
+}) {
   return (
     <aside className="shrink-0 overflow-y-auto border-l border-n-5 bg-n-1" style={{ width }}>
-      {repo ? (
+      {repo && view === "status" ? (
+        // O detalhe é sempre o do assunto do centro: com o status à mostra, o que interessa é o
+        // diff do arquivo sob o cursor, não o commit que ficou selecionado no log.
+        <StatusDetail repoId={repo.repoId} />
+      ) : repo ? (
         // Repositório sem commit nenhum (`unborn`): não há o que selecionar no log, então não
         // há detalhe de commit para mostrar — só o repositório em si.
         repo.head.kind === "unborn" ? (
@@ -215,6 +231,9 @@ function usePanelShortcuts() {
   }, [toggle]);
 }
 
+/** O que o painel central mostra. Não é persistido: quem abre o app quer ver o histórico. */
+type CenterView = "log" | "status" | "compare";
+
 export function Shell() {
   const sidebarWidth = useLayout((state) => state.sidebarWidth);
   const detailWidth = useLayout((state) => state.detailWidth);
@@ -222,6 +241,7 @@ export function Shell() {
   const detailCollapsed = useLayout((state) => state.detailCollapsed);
 
   const repo = useOpenRepo().data;
+  const [view, setView] = useState<CenterView>("log");
 
   useDocumentTitle(repo?.name ?? null, repo?.branch ?? null);
   usePanelShortcuts();
@@ -235,15 +255,17 @@ export function Shell() {
       <div className="flex-1 min-h-0 flex">
         {!sidebarCollapsed && (
           <>
-            <Sidebar width={sidebarWidth} repo={repo} />
+            {/* Escolher uma ref na sidebar leva ao commit dela — e isso só faz sentido com o
+                log à mostra, então o centro volta para ele. */}
+            <Sidebar width={sidebarWidth} repo={repo} onReveal={() => setView("log")} />
             <Splitter panel="sidebar" edge="end" />
           </>
         )}
-        <Center repo={repo} />
+        <Center repo={repo} view={view} onView={setView} />
         {!detailCollapsed && (
           <>
             <Splitter panel="detail" edge="start" />
-            <Detail width={detailWidth} repo={repo} />
+            <Detail width={detailWidth} repo={repo} view={view} />
           </>
         )}
       </div>

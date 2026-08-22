@@ -5,10 +5,10 @@
 
 ## Onde estamos
 
-- **Bloco atual:** E — trabalho local
-- **Último passo concluído:** Passo 48a — `exec::stage` (`git add`/`git reset`) + `POST /stage` e `/unstage`
-- **Próximo passo:** Passo 48b — painel de status na UI (stage/unstage por arquivo e em lote, teclado, refresh otimista)
-- **Comando para retomar:** `/blocao E` (ou `/bloco E` para o modo passo-a-passo)
+- **Bloco atual:** F — branches e remoto
+- **Último passo concluído:** Passo 58a — `exec::branch::create` + `POST /repos/{id}/branches` (criar branch, com checkout e upstream opcionais)
+- **Próximo passo:** Passo 58b — a UI de criar branch: caixa com nome, ponto de partida (HEAD, commit selecionado, ref) e os dois interruptores
+- **Comando para retomar:** `/blocao F` (ou `/bloco F` para o modo passo-a-passo)
 
 ## Mapa dos blocos
 
@@ -18,8 +18,8 @@
 | B | frontend de pé | 13–22 | **concluído** (10/10) |
 | C | abrir repositório | 23–34 | **concluído** (12/12) |
 | D | log (o coração) | 35–46 | **concluído** (12/12) |
-| E | trabalho local | 47–56 | em andamento (1/10) |
-| F | branches e remoto | 57–72 | pendente |
+| E | trabalho local | 47–56 | **concluído** (10/10) |
+| F | branches e remoto | 57–72 | em andamento (1/16) |
 | G | merge e conflitos | 73–79 | pendente |
 | H | resto | 80–96 | pendente |
 | I | empacotar | 97–103 | pendente |
@@ -91,6 +91,26 @@
 | 46b | `PickaxeFilter`: cancela e reinicia a cada tecla, lista cresce ao vivo pela cauda `hits` (**Bloco D concluído**) | 2026-08-22 |
 | 47 | `GET /repos/{id}/status`: `git status --porcelain=v2 -z` + parser + `git2::state()`, agrupado em staged/unstaged/untracked | 2026-08-22 |
 | 48a | `exec::stage` (`add`/`reset` por lista de caminhos) + `POST /repos/{id}/stage` e `/unstage`, devolvendo o status atualizado | 2026-08-22 |
+| 48b | `StatusPanel` + `lib/status.ts`: três grupos numa lista só, teclado (j/k/espaço/s/u/a/Esc) e otimista | 2026-08-22 |
+| 49a | `RepoRead::worktree_diff` (índice↔worktree e HEAD↔índice) + `GET /repos/{id}/diff?path=&side=` | 2026-08-22 |
+| 49b | `DiffView` extraído do `FileDiffView` + `StatusDetail`: o diff do lado certo no painel direito | 2026-08-22 |
+| 50a | `porc-git::patch` (recorte de patch por hunk, `@@` recalculado) + `RepoRead::worktree_patch` | 2026-08-22 |
+| 50b | `exec::run_with_input` + `exec::apply::cached` + `POST /repos/{id}/apply` | 2026-08-22 |
+| 50c | `HunkAction` no `DiffView` + `useApplyHunks`: botão "preparar"/"desfazer" no cabeçalho de cada hunk | 2026-08-22 |
+| 51a | `patch::HunkSelection` com linhas (adição não escolhida some, remoção vira contexto) + `hunks[].lines` na rota | 2026-08-22 |
+| 51b | Clique em linha no modo unificado marca; o botão do hunk passa a dizer "preparar N linhas" | 2026-08-22 |
+| 52a | `exec::commit` (mensagem por stdin, erros próprios, `commit.template`) + `POST /commit` e `GET /commit/template` | 2026-08-22 |
+| 52b | `CommitBox` no pé do status: régua 50/72, template semeado uma vez, ctrl+enter, tecla `c` | 2026-08-22 |
+| 53 | `amend`/`signoff`/`gpgSign` no `exec::commit`, na rota e em três interruptores do `CommitBox` | 2026-08-22 |
+| 54 | `--fixup=<oid>` (mensagem do git, alvo validado como hash) + botão "corrigir este commit" no detalhe | 2026-08-22 |
+| 55a | `exec::discard` (`checkout`, `remove_untracked` confinado, `apply --reverse`) + `POST /discard` e `/discard/hunks` | 2026-08-22 |
+| 55b | `ConfirmDiscard` (nomeia o que se perde, foco no cancelar) + tecla `d` no `StatusPanel` | 2026-08-22 |
+| 55c | Ação destrutiva por hunk no `DiffView`, só do lado de fora do commit | 2026-08-22 |
+| 56a | `RepoRead::range_diff`/`range_file_diff` (+ `summarize_trees` extraída) e `GET /compare` e `/compare/diff` | 2026-08-22 |
+| 56b | `CompareView`: dois campos de revisão com sugestão, botão de trocar os lados, lista e diff (**Bloco E concluído**) | 2026-08-22 |
+| 57a | `RepoRead::remotes`/`stashes` + `GET /repos/{id}/remotes` e `/stashes` — o que faltava para a sidebar | 2026-08-22 |
+| 57b | `features/sidebar/Sidebar`: branches, remotas agrupadas por remote, tags e stashes numa lista só, com filtro e teclado (**Passo 57 concluído**) | 2026-08-22 |
+| 58a | `exec::branch::create` (`git branch` / `git switch --create`, `--track` de três estados) + `POST /repos/{id}/branches` | 2026-08-22 |
 
 ## Decisões tomadas que valem para o futuro
 
@@ -274,6 +294,456 @@
   para `staged` na resposta, `POST /unstage` devolveu para `untracked`, e `paths: []`
   devolveu 400 sem tocar o git. Estado limpo depois (nada ficou staged, arquivo de teste
   removido).
+
+- **2026-08-22** — O centro do app virou **duas abas** (`log` / `status`), como o `CLAUDE.md`
+  manda ("centro (log ou status)"), e o estado da aba mora no `Shell` — **não** é persistido:
+  quem abre o app quer o histórico, e restaurar "status" no boot seguinte esconderia o log de
+  quem só passou por ali uma vez.
+- **2026-08-22** — O `StatusPanel` é **uma lista achatada** com cabeçalho de grupo no meio, não
+  três listas independentes: o cursor atravessa os três grupos com uma tecla só, que é o que faz
+  "marcar cinco arquivos espalhados e stagear" ser um gesto em vez de três. A identidade de uma
+  linha é o par `grupo:caminho`, nunca só o caminho — um arquivo parcialmente stageado (`MM`)
+  aparece nos dois grupos, e são coisas diferentes (o que vai no commit vs. o que ficou de fora).
+- **2026-08-22** — Teclado do status: `j`/`k`/setas movem, **espaço** marca e desce (marcar cinco
+  seguidos é espaço cinco vezes), `s` prepara, `u` desfaz, `a` marca/desmarca o grupo do cursor,
+  `Esc` limpa. Sem nada marcado, `s`/`u` valem para a linha do cursor — o caso comum de um arquivo
+  só não paga o custo de marcar antes. O painel toma o foco ao montar: sem isso `s` não chegaria a
+  lugar nenhum antes de um clique, e o aceite do passo é "só pelo teclado".
+- **2026-08-22** — O otimista do stage/unstage **prevê o movimento entre grupos** (`predict` em
+  `lib/status.ts`), com rollback em erro, e a resposta do servidor **substitui** o cache em vez de
+  invalidá-lo — as rotas do 48a já devolvem o `WorktreeStatus` novo, e um `invalidateQueries` aqui
+  gastaria um round-trip para descobrir o que o servidor acabou de dizer. A única troca de `kind`
+  que ele adivinha é `untracked` → `added`; o resto herda o que estava lá.
+- **2026-08-22** — `useStatus` é o **oposto** do log e das refs (`staleTime: Infinity`): usa
+  `staleTime: 0` e refetch ao voltar o foco da aba. O status muda por fora — o usuário salva no
+  editor dele —, e voltar para a aba é exatamente o gesto de quem fez isso. Watcher de verdade
+  (fsmonitor/inotify) não é deste bloco.
+- **2026-08-22** — Aceite do Passo 48b (2026-08-22): `npm run build` e `npm run lint` limpos (só o
+  aviso informativo pré-existente do `react-compiler` sobre `useVirtualizer`). Sem backend novo —
+  reusa `status`/`stage`/`unstage` (47/48a), já verificados ponta a ponta por HTTP.
+
+- **2026-08-22** — **Três testes já estavam vermelhos ao entrar no Passo 49a**, e não por bug: os
+  do `exec::path_filter` rodam contra o repositório do **próprio porcelain** e comparavam contra
+  listas de oid escritas à mão, que o commit `207b025` invalidou. Pior, o
+  `pickaxe_sem_ocorrencia` procurava um literal que passou a existir no histórico no commit que
+  criou o próprio arquivo de teste. Corrigidos para comparar contra o `git log` **de verdade**
+  rodado na hora (o contrato é "a mesma coisa que o git responderia", não um instante do
+  histórico) e para montar a agulha inexistente com um carimbo de nanossegundos. Sem isso, todo
+  aceite do Bloco E rodaria vermelho por motivo alheio ao passo.
+- **2026-08-22** — `worktree_diff(side, path)` cobre os dois lados com **uma** função:
+  `Unstaged` é `diff_index_to_workdir`, `Staged` é `diff_tree_to_index` contra a árvore do
+  `HEAD` (`None` em unborn, e aí tudo no índice é adição). Sai na mesma `FileDiff` do
+  `commit_diff` de propósito — é o que faz o visualizador do Passo 41 servir aos dois sem saber
+  de onde o patch veio. A conversão `git2::Patch` → `FileDiff` virou `patch_to_file_diff`,
+  compartilhada pelas duas.
+- **2026-08-22** — O pathspec do `worktree_diff` vai com `disable_pathspec_match(true)`:
+  comparação **literal**, não glob. Um arquivo de verdade chamado `notas[1].txt` não pode virar
+  padrão só por ter colchete no nome. E `include_untracked` + `show_untracked_content`, senão o
+  arquivo novo — justamente o que se quer olhar antes do primeiro `add` — não teria diff nenhum.
+- **2026-08-22** — **Sem `find_similar` no `worktree_diff`**, ao contrário do `commit_diff`: com
+  o diff já reduzido a um pathspec não há o outro lado do par para a detecção de rename achar.
+  Um arquivo renomeado e stageado aparece como adição do caminho novo — que é exatamente o
+  caminho que o `status` deu à UI, e o conteúdo mostrado é o certo.
+- **2026-08-22** — Erro novo `GitError::FileUnchanged` (404), separado do `FileNotInCommit`:
+  pedir o diff staged de um arquivo que só está modificado no worktree não é o mesmo que pedir
+  um arquivo que um commit não tocou — ali o commit é imutável, aqui basta stagear para o mesmo
+  pedido passar a valer.
+- **2026-08-22** — `DiffSide` deriva `Deserialize` no `porc-git` e é o próprio tipo do parâmetro
+  de query, **sem padrão**: qual lado se está olhando é a informação central da rota, e adivinhar
+  mostraria o diff errado sem avisar. Um `side` desconhecido morre no serde, com 400.
+- **2026-08-22** — O `DiffView` foi extraído do `FileDiffView` e **ficou onde nasceu**
+  (`features/log/`), importado pelo `features/status/StatusDetail`. Mover para um `features/diff/`
+  é renomeação, não decisão: vale quando aparecer o terceiro consumidor (Passo 56).
+- **2026-08-22** — Com o centro em `status`, o painel direito mostra o **diff do arquivo sob o
+  cursor**, não o commit selecionado no log: o detalhe é sempre o detalhe do assunto do centro. E
+  o lado vem do **grupo** da linha, sem seletor próprio — a linha de `MM` aparece nos dois grupos
+  justamente porque são dois diffs, e perguntar o lado de novo seria perguntar duas vezes.
+- **2026-08-22** — `stage`/`unstage` **invalidam** as queries `worktree-diff` (invalidação de
+  verdade, não `setQueryData` como no status): o servidor devolve o status novo, mas não os
+  patches, e o diff aberto na tela é justamente de um lado que acabou de mudar.
+- **2026-08-22** — Aceite do Passo 49a (2026-08-22): `cargo test --workspace` — 137 testes, tudo
+  verde (4 novos de `worktree_diff`: mudança só no worktree aparece de um lado só, `add` troca o
+  lado, arquivo novo vem inteiro como adição, arquivo limpo não tem diff de nenhum dos dois).
+  Clippy e `cargo fmt --check` limpos. Handshake HTTP completo contra um repositório sintético em
+  `~/porc-aceite-e`: `side=unstaged` trouxe o hunk certo de `a.txt` (`dois`→`DOIS` mais `quatro`),
+  `side=staged` deu 404 com a frase certa antes do `add` e o hunk igual depois, `b.txt` não
+  rastreado veio inteiro como adição, e `side=lixo` deu 400 no serde.
+- **2026-08-22** — Aceite do Passo 49b (2026-08-22): `npm run build` e `npm run lint` limpos.
+  Sem backend novo — reusa o `/diff` do 49a, já verificado ponta a ponta.
+
+- **2026-08-22** — **Passo 50 quebrado em 50a (recorte), 50b (aplicação + rota) e 50c (UI)**: o
+  caminho inteiro toca 7 arquivos. 50a é o texto do patch (`patch.rs`, `lib.rs`, `read.rs`), 50b
+  é o que o executa (`exec/mod.rs`, `exec/apply.rs`, `routes/repos.rs`, `porc-server/lib.rs`).
+- **2026-08-22** — O patch recortado sai do **patch cru do libgit2** (`worktree_patch`, novo no
+  `RepoRead`), não de uma reconstrução a partir da `FileDiff` que a UI tem. O cabeçalho de
+  verdade carrega `diff --git`, `index`, `new file mode`/`deleted file mode` e os modos — nada
+  disso cabe na forma que a interface consome, e inventá-lo seria adivinhar o que o git já disse.
+  `with_worktree_patch` monta o diff **uma vez** e entrega o `git2::Patch` a um fecho: é o que
+  garante que a numeração de hunk que a UI mostra é a mesma que o `git apply` recebe. (Fecho e
+  não valor de retorno porque `Patch` empresta o `Diff`, que empresta o `Repository`.)
+- **2026-08-22** — No recorte, **a contagem do lado antigo não muda e a do lado novo muda**: o
+  `git apply --cached` aplica contra o índice, que continua sendo o de antes de qualquer hunk,
+  mas a linha inicial do lado **novo** de cada hunk mantido precisa do deslocamento acumulado
+  **só dos mantidos**. Sem isso, stagear o terceiro de três hunks emite um patch apontando para
+  uma linha que não existe do lado que ele constrói. Tem teste de unidade e teste contra o `git`
+  de verdade (`o_ultimo_hunk_sozinho_tambem_aplica`).
+- **2026-08-22** — `exec::run_with_input` alimenta o `stdin` do git por **pipe**, nunca por
+  arquivo temporário: um patch em disco é uma janela em que outro processo pode lê-lo ou trocá-lo,
+  e mais um arquivo para limpar quando o comando morre no meio. A escrita vai numa task à parte —
+  escrever e esperar na mesma task se trancariam com o pipe cheio. `run` e `run_with_input`
+  compartilham `run_inner`, para o `SIGTERM`-graça-`kill_on_drop` existir num lugar só.
+- **2026-08-22** — `git apply --cached --whitespace=nowarn`: o patch saiu do arquivo do próprio
+  usuário, então espaço em branco "errado" nele é o que ele escreveu. Recusar por causa disso
+  (o que um `apply.whitespace = error` na config dele faria) transformaria a config de um
+  `git apply` de terminal numa parede aqui dentro.
+- **2026-08-22** — `POST /repos/{id}/apply` tem **um** campo `side` que decide as duas coisas:
+  de que lado os trechos estão agora e, por consequência, para onde vão (`unstaged` → stagear;
+  `staged` → desfazer, com `--reverse`). Elas nunca divergem — ninguém stagea o que já está no
+  índice. `--cached` nos dois sentidos: o arquivo em disco não é tocado, e há teste para isso.
+- **2026-08-22** — `GitError::NotUtf8` novo (422, não 400): recortar patch de arquivo em encoding
+  legado produziria um patch que não bate mais com o conteúdo — o `git apply` recusaria, ou pior,
+  aplicaria outra coisa. O pedido está bem formado; o arquivo é que não serve.
+- **2026-08-22** — Aceite do Passo 50a (2026-08-22): `cargo test --workspace` — 145 testes, tudo
+  verde (8 novos: 7 do `patch::parse`/`select` e 1 casando o patch cru do libgit2 com o parser e
+  conferindo que os dois caminhos veem o mesmo número de hunks). Clippy e `fmt` limpos.
+- **2026-08-22** — Aceite do Passo 50b (2026-08-22): `cargo test --workspace` — 150 testes, tudo
+  verde (5 novos de `exec::apply`, todos contra o `git` de verdade: um hunk de três entra e os
+  outros ficam de fora conferido pelo `git diff --cached`, o último hunk sozinho aplica,
+  `--reverse` tira do índice, o disco do usuário não é tocado, patch que não casa falha em vez de
+  aplicar torto). Clippy e `fmt` limpos. Handshake HTTP completo contra `~/porc-aceite-e` (30
+  linhas, 3 hunks): `POST /apply` com `hunks:[1]` deixou `a.txt` **nos dois grupos** e o
+  `git diff --cached` de verdade mostrou só `+MUDOU-B`; `side:"staged"` com `hunks:[0]` esvaziou
+  o índice de novo; seleção vazia e hunk inexistente deram 400 com a frase certa.
+
+- **2026-08-22** — A ação de hunk é um **botão no cabeçalho do próprio `@@`**, um hunk por
+  clique, sem marcação múltipla e sem confirmação: nada ali destrói trabalho (o arquivo em disco
+  não é tocado, `--cached`) e a volta é o mesmo botão do outro lado. `HunkAction` é opcional no
+  `DiffView` — ausente no diff de commit, que é imutável e não teria para onde apontar.
+- **2026-08-22** — `useApplyHunks` **não tem otimista**, ao contrário do stage por arquivo:
+  prever o efeito de um hunk sobre os três grupos exigiria simular o patch no cliente, que é
+  exatamente o que o `BLOCO-E.md` manda não fazer. O ida-e-volta é local e rápido.
+- **2026-08-22** — `DiffSide` mudou de casa: nasceu em `lib/status.ts` e foi para
+  `lib/api-types.ts`, que é onde moram os tipos que espelham o serde. `status.ts` re-exporta,
+  para os componentes continuarem importando de um lugar só.
+- **2026-08-22** — Aceite do Passo 50c (2026-08-22): `npm run build` e `npm run lint` limpos.
+  Sem backend novo — reusa o `/apply` do 50b, já verificado ponta a ponta com o `git diff
+  --cached` de verdade.
+
+- **2026-08-22** — As **duas regras** do recorte por linha, que é onde patch parcial feito à mão
+  costuma corromper trabalho silenciosamente: **adição não escolhida some** (ela ainda não existe
+  do lado antigo, e não vai passar para o novo) e **remoção não escolhida vira contexto** (a linha
+  continua nos dois lados, e o `git apply` precisa vê-la para casar o trecho). Trocar uma pela
+  outra ou some com uma linha que devia ficar, ou faz o patch deixar de casar. As contagens dos
+  dois lados do `@@` são recontadas a partir do que sobrou, não herdadas.
+- **2026-08-22** — A linha é identificada pela posição **entre as linhas de mudança** do hunk (a
+  primeira `+`/`-` é 0), não pela posição no corpo. Contexto não conta dos dois lados do fio. É o
+  que faz a numeração do cliente e a do servidor coincidirem sempre: o texto do patch tem linhas
+  que a UI não desenha (o marcador `\ No newline at end of file`), e numerar sobre "todas as
+  linhas" divergiria exatamente nos arquivos que têm isso. Selecionar contexto também não
+  significaria nada — contexto não muda de lado.
+- **2026-08-22** — O marcador `\ No newline at end of file` **acompanha a linha dele**: fica se a
+  linha foi mantida, cai se ela foi descartada. Tem teste.
+- **2026-08-22** — Hunk cuja seleção não deixou mudança nenhuma (só contexto) **não é emitido**, e
+  se nenhum hunk sobrar o pedido vira `EmptySelection` (400): um `git apply` de patch que não muda
+  nada falha, e falhar com a frase certa é melhor que falhar com a do git.
+- **2026-08-22** — `select_hunks(&[usize])` virou atalho para `select(&[HunkSelection])`. Uma
+  entrada só de verdade, para não haver dois caminhos de recorte que possam divergir.
+- **2026-08-22** — **Seleção por linha só no modo unificado.** No lado a lado, uma linha da
+  esquerda e uma da direita dividem a mesma fileira, e um clique ali seria ambíguo entre "esta
+  remoção" e "esta adição". Quem quer escolher linha troca para o unificado, que é onde cada linha
+  é uma linha. O botão por hunk continua nos dois modos.
+- **2026-08-22** — O `DiffView` recebe `key={path:side}` do `StatusDetail`: sem remontar, linhas
+  escolhidas num arquivo sobreviveriam para o seguinte e virariam um patch em cima do arquivo
+  errado.
+- **2026-08-22** — Aceite do Passo 51a (2026-08-22): `cargo test --workspace` — 156 testes, tudo
+  verde (6 novos do recorte por linha, incluindo o marcador de fim-sem-quebra, e 1 novo de
+  `exec::apply` contra o `git` de verdade). Clippy e `fmt` limpos. Handshake HTTP completo: num
+  hunk com 4 linhas de mudança (`-linha 6`, `-linha 7`, `+VIZINHA-1`, `+VIZINHA-2`), mandar
+  `lines:[0,2]` deixou no `git diff --cached` **exatamente** `-linha 6` e `+VIZINHA-1`; o hunk
+  inteiro (sem `lines`) continuou funcionando; linha fora da faixa deu 400.
+- **2026-08-22** — Aceite do Passo 51b (2026-08-22): `npm run build` e `npm run lint` limpos. Sem
+  backend novo — reusa o `/apply` do 51a.
+
+- **2026-08-22** — `git commit -F -`: a mensagem vai por **pipe**, nunca em `argv` (que qualquer
+  `ps` da máquina mostra) e nunca em arquivo temporário. Shell-out e não `git2` porque um commit
+  precisa disparar `pre-commit`/`commit-msg`/`post-commit`, respeitar `commit.gpgSign`,
+  `user.signingkey` e `core.hooksPath` — um commit escrito por dentro do libgit2 nasceria sem
+  nada disso.
+- **2026-08-22** — `--cleanup=strip`, que é o que o git aplica depois de uma sessão de editor —
+  e a caixa de mensagem da interface **é** o editor. Tira espaço no fim, linhas em branco
+  sobrando e as linhas de comentário que um `commit.template` traz. Consequência conhecida, a
+  mesma do terminal: uma linha começando com `#` é comentário e some.
+- **2026-08-22** — `Failure` ganhou o campo **`stdout`**. Não é generalidade gratuita: o
+  `git commit` escreve "nothing to commit" no **stdout**, não no stderr, e sem isso a única
+  informação útil da falha se perdia (o teste `indice_vazio_vira_erro_proprio` pegou isso).
+- **2026-08-22** — `CommitError` tem erros próprios (`EmptyMessage` 400, `NothingToCommit`,
+  `IdentityMissing` e `Refused` 409) em vez de cair no `diagnose` do Passo 34, que é um
+  catálogo de erro de **rede**. E `Refused` **passa a saída do hook adiante** (3 primeiras
+  linhas não vazias): a regra de "nunca stderr cru" existe contra jargão do git, e a mensagem de
+  um hook é escrita pelo time do usuário — é a única coisa útil que existe sobre aquela recusa.
+- **2026-08-22** — Mensagem vazia é checada **antes** de chamar o git: uma volta inteira ao
+  processo para descobrir o que dá para saber daqui não se paga.
+- **2026-08-22** — `commit.template` é rota própria (`GET /repos/{id}/commit/template`), não um
+  campo do `status`: é config lida uma vez ao abrir a caixa, e o status é pedido a toda hora.
+  Template ausente, ilegível ou apontando para o nada é `null` — nunca pode impedir alguém de
+  commitar. O `~/` é expandido na mão (não há shell, e o git só o expande quando ele mesmo lê o
+  arquivo).
+- **2026-08-22** — A caixa é **uma área de texto só**, assunto e corpo juntos, e não dois campos:
+  é a forma do `commit.template`, a forma que o git recebe e a forma que quem cola uma mensagem
+  pronta espera. A régua de 50/72 **avisa e não trava** (inclusive sobre a linha em branco
+  faltando depois do assunto): a convenção é forte, mas é convenção.
+- **2026-08-22** — O template entra **uma vez**, e só numa caixa vazia (`useRef` de semeado):
+  recarregá-lo por cima de algo que a pessoa está escrevendo apagaria o trabalho dela. E a caixa
+  só é limpa **em caso de sucesso** — uma mensagem longa não pode sumir porque um hook recusou.
+- **2026-08-22** — Aceite do Passo 52a (2026-08-22): `cargo test --workspace` — 161 testes, tudo
+  verde (5 novos de `exec::commit`, incluindo um `pre-commit` de verdade que recusa e cuja
+  mensagem chega ao erro). Clippy e `fmt` limpos. Handshake HTTP completo contra
+  `~/porc-aceite-e`: commit sem nada preparado → 409 "não há nada preparado para commitar";
+  mensagem vazia → 400; `stage` + `commit` devolveu o oid e um status vazio, e o
+  `git log -1` de verdade mostrou assunto e corpo separados corretamente; `commit.template`
+  configurado voltou com o conteúdo do arquivo.
+- **2026-08-22** — Aceite do Passo 52b (2026-08-22): `npm run build` e `npm run lint` limpos.
+  Sem backend novo — reusa `/commit` e `/commit/template` do 52a.
+
+- **2026-08-22** — GPG é **flag efêmera, nunca `git config`**: `--gpg-sign`/`--no-gpg-sign` valem
+  só para aquele commit. E o interruptor da UI tem **três** estados, não dois — desligá-lo volta
+  para "como você configurou" (`null`, sem flag nenhuma), não para "não assinar". Quem tem
+  `commit.gpgSign = true` continua assinando sem precisar lembrar de ligar nada.
+- **2026-08-22** — `CommitError::SigningFailed` é checado **antes** de tudo em `classify`: o git
+  reporta falha de assinatura como `gpg failed to sign the data` seguido de `failed to write
+  commit object`, e sem a checagem específica isso viraria uma `Refused` genérica com o jargão
+  do gpg dentro. A causa quase sempre é pinentry — o `gpg-agent` precisa perguntar a passphrase
+  e não tem onde, porque não herdamos terminal e o askpass do Passo 33 é do git e do ssh, não do
+  gpg. Fazer o gpg passar pelo mesmo socket é ideia para outro bloco (ver pendências).
+- **2026-08-22** — Com `--amend` o botão de commitar **não** exige nada preparado: emendar só a
+  mensagem é o uso mais comum de todos. E ligar o amend carrega a mensagem anterior por
+  `useCommitDetail(headOid)` — com a mesma regra do template: só entra na caixa vazia ou por cima
+  do template intocado, nunca por cima do que a pessoa escreveu.
+- **2026-08-22** — Esse carregamento é **ajuste durante o render** (com um `carregadoDe`), não
+  `useEffect`: a mensagem chega de uma consulta, então não dá para resolvê-la no evento do
+  clique, e o `set-state-in-effect` do oxlint pegou a primeira versão. Mesma correção do Passo
+  41b, não supressão.
+- **2026-08-22** — Aceite do Passo 53 (2026-08-22): `cargo test --workspace` — 166 testes, tudo
+  verde (5 novos: amend reescreve em vez de criar outro e o log continua com **um** commit,
+  amend sem commit anterior tem erro próprio, signoff põe o trailer com a identidade
+  configurada, `--no-gpg-sign` vence um `commit.gpgSign=true` com chave inexistente, e o
+  `classify` de stderr real de falha de assinatura). Clippy, `fmt`, `npm run build` e
+  `npm run lint` limpos. Handshake HTTP: signoff pôs `Signed-off-by:` de verdade; amend trocou a
+  mensagem e o log ficou com **dois** commits (não três); `gpgSign:true` com chave inexistente
+  deu 409 com a frase de pinentry; `gpgSign:false` passou. **Assinar de verdade não foi
+  exercitado** — não há chave GPG nesta máquina; o que se verificou foi o caminho de erro e o de
+  desligar. Vale um teste manual de quem tiver chave (anotado nas pendências).
+
+- **2026-08-22** — No `--fixup`, **a mensagem é do git**: ele monta `fixup! <assunto do alvo>`
+  sozinho, e é essa string exata que o `rebase --autosquash` reconhece depois. Escrever a
+  mensagem à mão seria a forma mais fácil de produzir um fixup que o autosquash ignora. Por isso
+  `--fixup` e `-F -` são mutuamente exclusivos aqui (o git recusa os dois juntos), o stdin não é
+  alimentado nesse caminho, e a checagem de "mensagem vazia" não vale para ele. Na UI, o gesto
+  inteiro é **um botão** no painel de detalhe — não há caixa de texto porque não há texto nosso.
+- **2026-08-22** — O alvo do fixup é validado como **hash** (7 a 40 hexadecimais), não como
+  revisão livre: o valor vem do cliente e vira parte de um argumento. Aceitar revisão daria a ele
+  `HEAD@{…}`, `:/texto` e companhia — sintaxes que o git resolve e que ninguém aqui está
+  preparado para explicar. A UI sempre tem o oid completo do commit selecionado. Mesmo
+  raciocínio da validação de `name` no `init`.
+- **2026-08-22** — Aceite do Passo 54 (2026-08-22): `cargo test --workspace` — 168 testes, tudo
+  verde (2 novos: o fixup monta a mensagem certa **e um `rebase --autosquash` de verdade a funde
+  de volta no alvo**, deixando um commit só; e cinco alvos inválidos — `HEAD`, `:/assunto`,
+  `../etc`, `zzzz`, vazio — recusados antes de chamar o git). Clippy, `fmt`, `npm run build` e
+  `npm run lint` limpos. Handshake HTTP: `fixup` de um commit real produziu
+  `fixup! adiciona c (mensagem emendada)`; alvo `HEAD` deu 400.
+
+- **2026-08-22** — Descarte são **três comandos**, porque são três coisas: rastreado volta com
+  `git checkout -- <paths>` (ao **índice**, não ao `HEAD` — o que estava preparado continua
+  preparado, mesma semântica do terminal); não rastreado é **apagado** com `remove_file`, porque
+  o git não tem versão nenhuma dele para restaurar; e trecho é `git apply --reverse` **sem**
+  `--cached`. `remove_file` e não `git clean`: o `clean` opera por pathspec e tem vizinhos
+  (`-x`, `-d`, `-f`) cuja diferença entre "apaga o que você pediu" e "apaga a pasta inteira" é
+  uma letra.
+- **2026-08-22** — Cada caminho de `remove_untracked` é canonicalizado e conferido contra a raiz
+  do repositório, e diretório é recusado: um `..` no meio ou um symlink apontando para fora não
+  podem virar um `remove_file` em outro lugar do disco, e "descartar uma pasta" seria uma
+  remoção recursiva pedida por um clique. Tem teste com um arquivo de fora que continua lá.
+- **2026-08-22** — **Quem decide entre restaurar e apagar é o servidor**, pelo `status`: o
+  cliente só nomeia caminhos. Deixá-lo escolher o comando seria deixá-lo pedir a remoção de um
+  arquivo rastreado por engano.
+- **2026-08-22** — A tecla `d` **não descarta: abre a confirmação**. A tecla é o começo do
+  gesto, nunca o fim. A confirmação **nomeia o que será perdido**, um caminho por linha, em vez
+  de perguntar "tem certeza?", e o foco nasce no **cancelar** — um Enter distraído não pode ser
+  o gesto que apaga. Nada de otimista aqui: mostrar o resultado antes de o git confirmar seria
+  dizer que algo foi perdido antes de saber se foi.
+- **2026-08-22** — O botão de descarte por hunk só aparece do lado **unstaged**. Do lado do
+  índice existe "desfazer", que não perde nada — oferecer descarte ali seria oferecer perda onde
+  há uma saída sem perda nenhuma. No `DiffView` ele é uma prop separada (`destructive`), com cor
+  de remoção e por último na barra: quem a passa é obrigado a pensar duas vezes antes de passá-la.
+- **2026-08-22** — Aceite dos Passos 55a/b/c (2026-08-22): `cargo test --workspace` — 173 testes,
+  tudo verde (5 novos de `exec::discard`: checkout volta ao índice, checkout **preserva o
+  preparado**, não rastreado é apagado, caminho com `..` não apaga nada fora, e reverter um hunk
+  desfaz só ele no disco). Clippy, `fmt`, `npm run build` e `npm run lint` limpos. Handshake HTTP
+  contra `~/porc-aceite-e`: descartar o hunk 0 de um arquivo com dois hunks tirou `MUDOU-A` do
+  **disco** e deixou `MUDOU-C`; descartar `a.txt` + `lixo.txt` deixou o status limpo e apagou o
+  não rastreado; lista vazia deu 400.
+
+- **2026-08-22** — `summarize_trees` foi **extraída** do `commit_detail`: o diffstat entre duas
+  árvores é literalmente a mesma conta no detalhe de um commit (pai ↔ commit) e na comparação
+  arbitrária (duas árvores quaisquer). Em dois lugares seriam dois lugares onde a contagem por
+  arquivo pode divergir do agregado.
+- **2026-08-22** — Os lados da comparação são **revisões**, resolvidas por `revparse_single` —
+  a mesma resolução do terminal, então `HEAD~2`, `origin/main`, uma tag ou um hash colado
+  funcionam. Isso é seguro aqui de um jeito que **não** seria num shell-out: nada disto vira
+  `argv`, é chamada de biblioteca dentro do próprio repositório do usuário. O que ela não
+  resolve vira `InvalidCommit` → 400.
+- **2026-08-22** — `RangeDiff` é um tipo próprio, não `CommitDetail` reaproveitado: ali não há
+  autor, committer nem mensagem, porque não há um commit sendo mostrado. E `from`/`to` voltam
+  **resolvidos em oid** mesmo quando o pedido veio por nome — é assim que fica claro o que foi
+  comparado de verdade.
+- **2026-08-22** — Na UI os dois lados são **campos de texto com sugestão** (`datalist` das
+  refs), não seletores fechados: o valor aceito é qualquer revisão que o git entenda, e uma
+  lista fechada barraria todas as outras sem ganhar nada. Botão `⇄` para trocar os lados, que é
+  o gesto seguinte mais comum. E o `DiffView` ali vai **sem ação nenhuma** nos hunks: comparar é
+  leitura, não há para onde mover um trecho entre dois pontos do histórico.
+- **2026-08-22** — Aceite do Passo 56a (2026-08-22): `cargo test --workspace` — 177 testes, tudo
+  verde (4 novos: resolução por nome de revisão devolvendo oid completo dos dois lados; comparar
+  um commit deste repositório com o pai dando **exatamente** o mesmo diffstat que o
+  `commit_detail` dele; o diff de um arquivo dentro da comparação com o mesmo número de linhas
+  do diff pelo commit; e três revisões inexistentes viradas em 400). Clippy e `fmt` limpos —
+  dois avisos reais corrigidos de verdade (um `&mut` desnecessário e itens depois do módulo de
+  teste, resíduo da extração). Handshake HTTP: comparar duas branches deu `2 arquivos, +2 -0`,
+  batendo com o `git diff --shortstat` de verdade; o diff de `c.txt` veio com o hunk certo;
+  revisão inexistente deu 400.
+- **2026-08-22** — Aceite do Passo 56b (2026-08-22): `npm run build` e `npm run lint` limpos.
+  Sem backend novo — reusa `/compare` e `/compare/diff` do 56a.
+
+- **2026-08-22** — **Bloco F começou. Passo 57 quebrado em 57a (backend) e 57b (sidebar)**: o
+  `GET /refs` do Passo 39a já entrega branches, remotas, tags e o `HEAD` destacado, mas a sidebar
+  do 57 pede duas coisas que não existiam em lugar nenhum — os **remotes** configurados e a pilha
+  de **stash**. Backend sozinho já usa 4 arquivos (`model.rs`, `read.rs`, `routes/repos.rs`,
+  `porc-server/lib.rs`), o teto da regra 2. Mesmo raciocínio de 25a/25b, 39a/39b, 48a/48b.
+- **2026-08-22** — **`refs` continua sendo uma rota só, e `remotes`/`stashes` são outras duas.**
+  Não é fragmentação: `refs` são pontas do histórico (mudam a cada fetch, e o log as consome para
+  marcar linha), remote é **configuração** (só muda quando o usuário a muda, Passo 62) e stash é
+  uma **pilha** que não marca linha nenhuma do log. Três ritmos de invalidação diferentes; juntá-las
+  numa rota "sidebar" faria a UI rebuscar as três sempre que uma mudasse.
+- **2026-08-22** — A sidebar agrupa remota por remote usando a **lista de remotes do git**, não
+  partindo `origin/main` na primeira barra. Partir acerta quase sempre, mas o git aceita remote com
+  barra no nome — e quem sabe onde o nome do remote termina é o próprio git. É também o que o
+  Passo 62 (gerenciar remotes) e o 70 (escolher para onde empurrar) vão consumir.
+- **2026-08-22** — `StashEntry` **não** é uma `RefMarker`: `refs/stash` é uma ref só, e a pilha
+  inteira vive no **reflog** dela. Marcar o log com "stash" seria marcar um commit que nem está no
+  histórico. A `message` sai como o git a escreveu (`On main: assunto`), sem reescrita nossa — é a
+  mesma linha do `git stash list`, e quem stashou reconhece.
+- **2026-08-22** — `Repository::stash_foreach` exige `&mut Repository` mesmo só lendo (é o reflog
+  de `refs/stash` que ele percorre, e o libgit2 marca a operação inteira como mutável) — daí o
+  `let mut repo` dentro de `stashes()`, que é o único método de leitura assim.
+- **2026-08-22** — Em **git2 0.21** as APIs de string ficaram falíveis: `StringArray::iter()`
+  entrega `Result<Option<&str>, Error>`, `Remote::url()` entrega `Result<&str, Error>` (e `Ok("")`
+  quando não há URL nenhuma) e `Remote::pushurl()` entrega `Result<Option<&str>, Error>`. Nome ou
+  URL não-UTF-8 é **descartado**, não remendado com `lossy`: um nome remendado não seria aceito de
+  volta por comando nenhum, e uma URL remendada é pior que nenhuma. `pushUrl` só vem preenchida
+  quando existe `remote.<nome>.pushurl` própria — sem ela a UI não repete a mesma linha duas vezes.
+- **2026-08-22** — Aceite do Passo 57a (2026-08-22): `cargo test --workspace` — 179 testes, tudo
+  verde (2 novos: o `origin` deste próprio checkout com URL de fetch e sem `pushurl`; e uma pilha
+  de dois stashes num repositório sintético, conferindo que o último a entrar é o `index: 0`, que
+  os oids diferem e que o arquivo em disco voltou ao conteúdo commitado). Clippy e
+  `cargo fmt --check` limpos. Handshake HTTP completo contra um repositório sintético em
+  `~/porc-aceite-f` (dois remotes, um deles com `pushurl` própria; duas branches; uma tag; dois
+  stashes): `/remotes` devolveu `backup` com `fetchUrl` e `pushUrl` diferentes e `origin` com
+  `pushUrl: null`; `/stashes` devolveu os dois na mesma ordem do `git stash list` de verdade
+  (`segundo` em 0, `primeiro` em 1); `repo_id` inexistente deu 404 e sem cookie de sessão deu 401.
+  Repositório de teste apagado e a entrada dele removida dos recentes ao final.
+
+- **2026-08-22** — A sidebar é **uma lista achatada** com cabeçalho de grupo no meio, a mesma
+  forma do `StatusPanel` e pelo mesmo motivo: o cursor atravessa branches, remotas, tags e
+  stashes com uma tecla só, e o filtro corta a lista inteira sem obrigar ninguém a escolher em
+  qual seção procurar. O filtro casa contra o **nome inteiro** (`origin/main`) e a linha mostra
+  o nome **curto** (`main`), porque o nome do remote já está no cabeçalho do grupo — repeti-lo
+  em cada linha gastaria metade da largura da sidebar com a mesma palavra.
+- **2026-08-22** — O agrupamento das remotas usa o remote de **nome mais longo** que prefixa a
+  ref (`remoteOf`), não o primeiro que casa: com `origin` e `sub/backup` configurados,
+  `sub/backup/main` é do segundo, e um `startsWith` ingênuo o jogaria em `origin` se a ordem
+  ajudasse. Remota cujo prefixo não bate com remote nenhum (o remote foi removido e as
+  `refs/remotes/<nome>/…` ficaram) vai para um grupo **"remotas sem remote"** em vez de sumir —
+  esconder seria mentir sobre o que existe no disco. Todo remote configurado ganha cabeçalho
+  mesmo com zero remotas buscadas: é ali que se vê que o remote existe, e é de onde o Passo 62
+  vai gerenciá-los.
+- **2026-08-22** — Ordenação por `localeCompare(…, { numeric: true })`, não alfabética pura:
+  numa lista de tags `v2` tem que vir antes de `v10`.
+- **2026-08-22** — Enter numa ref **leva ao commit dela no log** (`useCommitSelection` + o
+  centro volta para a aba `log`), e nada mais. Trocar de branch é o Passo 59 — dar checkout a um
+  Enter aqui antes de existir o aviso de worktree suja (Passo 60) seria a forma mais fácil de
+  alguém perder trabalho com um toque. Stash também navega: é um commit de verdade, o detalhe
+  abre, mas nenhuma linha do log acende, porque ele não está no histórico.
+- **2026-08-22** — Teclado: `j`/`k`/setas movem, `Enter` revela, `/` salta para o filtro, `Esc`
+  limpa; no campo de filtro, `↓` entra na lista e `Enter` revela a primeira ponta que sobrou —
+  "digitar três letras e chegar lá" sem passar pela lista no meio. A sidebar **não** rouba o
+  foco ao montar (diferente do `StatusPanel`): quem abre o app está olhando o centro.
+- **2026-08-22** — `<RefTree key={repo.repoId}>`: trocar de repositório remonta a árvore e zera
+  filtro e cursor. Sem isso, o filtro do repositório anterior esconderia as refs do novo.
+- **2026-08-22** — `useRemotes`/`useStashes` nasceram com `staleTime: Infinity`, como
+  `useRefs` — as três só mudam por ação nossa (Passos 60, 62, 63) ou por fora, e é o WebSocket
+  que vai invalidá-las. Três chaves de cache diferentes de propósito, pelo mesmo motivo que são
+  três rotas (57a): ritmos de invalidação diferentes.
+- **2026-08-22** — Este projeto **não tem prettier configurado**; rodar `npx prettier --write`
+  reformatou o arquivo novo para 80 colunas, contra as ~100 do resto do código. Desfeito na mão.
+  Formatação de TS/TSX aqui é manual, conferida por `npm run lint` (oxlint) — não rodar prettier.
+- **2026-08-22** — Aceite do Passo 57b (2026-08-22): `npm run build` e `npm run lint` limpos (só
+  o aviso pré-existente do `react-compiler`). `cargo build --release` embutiu o bundle novo
+  (contém "filtrar refs", "remotas sem remote", "refs do repositório" e "nada com esse nome",
+  confirmado por grep no JS servido). Contra **este** repositório por HTTP, `/refs` deu `main`
+  (`isHead`) e `origin/main` e `/remotes` deu `origin` — exatamente o `git branch -a`. E contra
+  um repositório sintético em `~/porc-aceite-57b` desenhado para os casos difíceis (branches
+  `main`/`feature/x`/`feature/y`, tags `v2` e `v10`, remotes `origin` **e `sub/backup`** — com
+  barra no nome —, uma `refs/remotes/sumido/antiga` órfã e dois stashes), o `build`/`filter` do
+  componente foi rodado sobre o JSON **real** das três rotas (via `jiti`, harness temporário
+  fora do projeto): `sub/backup/main` caiu em `sub/backup` e não em `origin`, `sumido/antiga`
+  caiu em "remotas sem remote", `v2` veio antes de `v10`, o filtro `main` acertou os quatro
+  grupos e `sub/backup` afunilou para um. Repositório de teste apagado, entrada removida dos
+  recentes e servidor derrubado ao final.
+
+- **2026-08-22** — **Passo 58 quebrado em 58a (backend) e 58b (UI)**: o backend sozinho já usa os
+  4 arquivos do teto (`exec/branch.rs`, `exec/mod.rs`, `routes/repos.rs`, `porc-server/lib.rs`).
+  Mesmo raciocínio de 25a/25b, 48a/48b, 57a/57b.
+- **2026-08-22** — Criar branch é **shell-out**, não `git2::Repository::branch`: escrever a ref
+  pelo libgit2 funcionaria, mas o passo pede checkout e upstream opcionais no mesmo gesto — e aí
+  o git precisa escrever índice e worktree, disparar `post-checkout` e gravar
+  `branch.<nome>.remote`/`.merge` respeitando o `branch.autoSetupMerge` do usuário.
+- **2026-08-22** — Com checkout é `git switch --create`, **não** `git checkout -b`: o `checkout` é
+  dois comandos num só (trocar de branch e restaurar arquivo), e é a metade que restaura arquivo
+  que destrói trabalho sem aviso. Exige git ≥ 2.23; o piso do projeto é 2.30.
+- **2026-08-22** — **A ordem das flags do `switch` importa**: `--create` pede um valor, então
+  `git switch --create --track <nome>` faria o git tomar `--track` como o nome da branch. O
+  tracking vai **antes** do `--create`, que fica colado no nome. No `git branch` não há esse
+  risco, mas a montagem é a mesma para não haver duas ordens no mesmo arquivo.
+- **2026-08-22** — `track: Option<bool>` tem **três** estados, igual ao `gpg_sign` do Passo 53:
+  ausente respeita o `branch.autoSetupMerge` (que já liga o tracking sozinho ao partir de uma
+  remota — o que o Passo 59 vai querer), `Some` força por flag, nunca por `git config`.
+- **2026-08-22** — O ponto de partida é **oid ou nome de ref**, nunca revisão livre: `HEAD~2`,
+  `:/assunto` e `main@{1}` são recusados com 400 antes de chegar ao git. É o mesmo raciocínio da
+  validação do alvo do `--fixup` (Passo 54) — a UI sempre tem o oid completo do commit
+  selecionado ou o nome da ref clicada —, e é também o que impede um valor começando com `-` de
+  virar flag na linha de comando. Nome de branch reusa o `validate_branch_name` do `init`, para
+  haver uma régua só no projeto inteiro.
+- **2026-08-22** — `tip_of` faz `rev-parse --verify refs/heads/<nome>`, com o caminho inteiro e
+  não o nome curto: um arquivo chamado `nova` na worktree tornaria `git rev-parse nova` ambíguo.
+- **2026-08-22** — A rota devolve `{name, oid, repo}` — o `Repo` **depois**, porque com checkout o
+  `HEAD` mudou e é dali que a barra de topo e o título da aba se atualizam sem um segundo
+  request. A lista de refs **não** vem junto: é outra rota, com outro ritmo de invalidação
+  (decisão do 57a), e o cliente a invalida.
+- **2026-08-22** — Ponto de partida que não resolve é **400**, não 404: mesma régua que o oid de
+  commit que não existe neste repositório já tinha (`GitError::InvalidCommit`). Branch que já
+  existe é 409, worktree que seria sobrescrita é 409 (`WouldOverwrite`, com frase própria — o
+  fluxo de stash automático é o Passo 60).
+- **2026-08-22** — Aceite do Passo 58a (2026-08-22): `cargo test --workspace` — **186 testes**,
+  tudo verde (7 novos de `exec::branch`: criar do `HEAD` sem mover o `HEAD`, criar de um commit
+  antigo, `switch --create` deixando o `HEAD` na nova e o arquivo do último commit fora da
+  worktree, `--track` gravando `branch.<nome>.merge`, nome repetido, partida inexistente e a
+  tabela de nomes/partidas recusados antes do git). Clippy e `cargo fmt --check` limpos.
+  Handshake HTTP completo contra um repositório sintético em `~/porc-aceite-58a` (três commits):
+  criar em `ed32736` (o commit mais antigo) devolveu a branch apontando para ele; `checkout:true`
+  devolveu o `repo` já com `head.name: "trabalhando"`; `track:true` sobre `main` gravou
+  `refs/heads/main` no `branch.com-upstream.merge`; nome repetido deu 409, partida inexistente e
+  `HEAD~2` e nome `-f` deram 400; sem cookie 401 e `repo_id` desconhecido 404. O `git branch -vv`
+  **de verdade** confirmou as quatro branches, o upstream e o `HEAD`. Repositório apagado,
+  entrada removida dos recentes e servidor derrubado ao final.
 
 - **2026-08-21** — O confinamento do `fs/list` é em três camadas, nesta ordem: componente
   `..` no pedido → 403 sem tocar o disco; `fs::canonicalize` (404 se não existe); prefixo
@@ -920,6 +1390,33 @@
 
 ## Pendências / ideias anotadas
 
+- Os aceites **visuais** do Bloco E (painel de status navegado só pelo teclado, seleção de linha
+  no diff, confirmação de descarte, caixa de mensagem com a régua, a aba de comparação) foram
+  verificados por build limpo, lint limpo, inspeção do código e pelo contrato HTTP completo
+  batido com o binário de release — **não** por clicar de verdade num navegador. Vale o usuário
+  abrir uma vez e fazer o ciclo inteiro à mão.
+- O `StatusPanel` não tem rolagem automática para o cursor (`scrollIntoView`): numa lista de
+  status maior que a tela, `j`/`k` movem o destaque para fora da vista. O `CommitList` resolve
+  isso pelo virtualizador; aqui a lista não é virtualizada.
+- Não há atalho de teclado para trocar de aba no centro (log/status/comparar). Vira comando na
+  command palette (Ctrl+K) quando ela existir.
+- O descarte por **linha** existe no servidor (o mesmo `HunkPick` com `lines`), mas a UI só
+  oferece o hunk inteiro no botão destrutivo quando não há linhas marcadas — marcar linhas e
+  clicar em "descartar" já funciona, só não está anunciado em lugar nenhum.
+- `git checkout -- <paths>` no discard volta ao **índice**, não ao `HEAD`. É a semântica certa e
+  a do terminal, mas a confirmação não diz isso — quem tem algo preparado do mesmo arquivo pode
+  esperar voltar ao último commit.
+
+- **Assinar um commit GPG de verdade não foi exercitado** (Passo 53): não há chave nesta
+  máquina. Verificados só o caminho de erro (frase de pinentry) e o de desligar a assinatura.
+- O `gpg` não passa pelo askpass do Passo 33 (`GIT_ASKPASS`/`SSH_ASKPASS` são do git e do ssh).
+  Uma chave com passphrase e sem `gpg-agent` já destravado sempre vai falhar com a frase do
+  `SigningFailed`. Ligar o `gpg` ao mesmo socket exigiria um `pinentry-program` próprio — dá
+  para fazer, mas é assunto de outro bloco.
+- Commit feito pela interface **não atualiza o índice de busca** (FTS5): quem reconstrói é o job
+  de indexação, que só nasce ao abrir o repositório. Um commit novo só aparece na busca no boot
+  seguinte.
+
 - `POST /api/v1/ping` e `GET /api/v1/whoami` continuam provisórias (existem para exercitar
   CSRF e auth). `ping` sai no Bloco E. O `whoami` **não** virou informação de repositório como
   estava previsto: quem faz isso é `GET /api/v1/repos/{id}`, e o `whoami` sobrou. Pode sair
@@ -949,7 +1446,8 @@
 - Abrir uma pasta **dentro** de um repositório não abre o repositório (é `open`, não
   `discover`). Se isso incomodar na prática, o lugar de resolver é o `POST /api/v1/repos`,
   reconferindo o resultado do `discover` contra a raiz do confinamento.
-- A sidebar ainda lista uma branch só (a atual). Refs de verdade pedem rota própria — Bloco F.
+- A sidebar mostra as refs mas ainda não **age** sobre elas: criar (58), trocar (59), renomear e
+  deletar (61) chegam como menu de contexto/atalho nos passos seguintes do Bloco F.
 - A `ThemeSwitch` mora na barra de topo por falta de lugar melhor. Quando houver command
   palette (Ctrl+K), o tema vira comando e a barra fica só com repo e branch.
 - O aceite do Passo 33 foi feito pelo caminho de **credencial HTTPS** (`GIT_ASKPASS`), que é o
@@ -1006,6 +1504,25 @@
   escopo do Passo 38.
 
 ## Ambiente verificado
+
+- **Aceite do Bloco E inteiro (2026-08-22)**, rodado uma vez ao fim com o **binário de release**
+  (`cargo build --release`: 39s, 6,8 MB, frontend embutido) contra um repositório sintético em
+  `~/porc-aceite-bloco-e` (um arquivo de 40 linhas com três mudanças espalhadas e um arquivo
+  novo). O ciclo inteiro do bloco, ponta a ponta por HTTP, sem tocar no `git` do terminal em
+  nenhum passo: (1) `status` trouxe os três grupos certos; (2) o diff do working tree veio com
+  **3 hunks**; (3) stagear só o hunk do meio deixou no índice exatamente `+MEIO MUDADO`;
+  (4) stagear **duas linhas** do primeiro hunk acrescentou exatamente `+TOPO MUDADO`;
+  (5) `stage` do arquivo novo pelo caminho; (6) **descartar** o hunk que sobrou tirou
+  `FIM MUDADO` do disco; (7) `commit` com `signoff` respondeu com o oid e um status
+  completamente vazio; (8) o commit apareceu no topo do `log`; (9) `compare HEAD~1..HEAD` deu
+  `+3 -2` nos dois arquivos; (10) o `git log` e o `git status` **de verdade** confirmaram a
+  mensagem, o trailer `Signed-off-by:` e a worktree limpa. **O critério do bloco — "dá para
+  preparar e fechar um commit sem tocar no terminal" — está cumprido.** Repositórios de teste
+  apagados ao final.
+- `cargo test --workspace` ao fim do Bloco E: **177 testes**, tudo verde. Clippy
+  (`--workspace --all-targets --all-features`) e `cargo fmt --check` limpos; `npm run build` e
+  `npm run lint` limpos (resta só o aviso informativo pré-existente do `react-compiler` sobre o
+  `useVirtualizer`).
 
 - macOS arm64 (Darwin 25.5.0) — máquina de desenvolvimento
 - Node v22.23.1, npm 10.9.8 — ok

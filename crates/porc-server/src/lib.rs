@@ -249,11 +249,57 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/repos/{repo_id}", get(routes::repos::get))
         .route("/api/v1/repos/{repo_id}/log", get(routes::repos::log))
         .route("/api/v1/repos/{repo_id}/refs", get(routes::repos::refs))
+        .route(
+            "/api/v1/repos/{repo_id}/branches",
+            post(routes::repos::branch_create),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/remotes",
+            get(routes::repos::remotes),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/stashes",
+            get(routes::repos::stashes),
+        )
         .route("/api/v1/repos/{repo_id}/status", get(routes::repos::status))
         .route("/api/v1/repos/{repo_id}/stage", post(routes::repos::stage))
         .route(
             "/api/v1/repos/{repo_id}/unstage",
             post(routes::repos::unstage),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/diff",
+            get(routes::repos::worktree_diff),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/apply",
+            post(routes::repos::apply_hunks),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/discard",
+            post(routes::repos::discard),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/discard/hunks",
+            post(routes::repos::discard_hunks),
+        )
+        // Estática antes da paramétrica de novo: `commit/template` é literal nos dois segmentos,
+        // e o matchit do axum o prefere ao `commits/{oid}` logo abaixo.
+        .route(
+            "/api/v1/repos/{repo_id}/commit",
+            post(routes::repos::commit_create),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/commit/template",
+            get(routes::repos::commit_template),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/compare",
+            get(routes::repos::compare),
+        )
+        .route(
+            "/api/v1/repos/{repo_id}/compare/diff",
+            get(routes::repos::compare_diff),
         )
         .route("/api/v1/repos/{repo_id}/paths", get(routes::repos::paths))
         .route("/api/v1/repos/{repo_id}/search", get(routes::repos::search))
